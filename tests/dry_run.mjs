@@ -295,9 +295,10 @@ const scenarios = [
     check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
     check(r.result.handoffs.length === 1 && r.result.handoffs[0].status === 'recorded', `handoffs ${JSON.stringify(r.result.handoffs)}`);
     check(!r.keys.some((k) => k.startsWith('kernel_liaison')) && !r.phases.includes('Kernel'), 'no liaison, no Kernel phase');
+    check(r.calls.every((c) => !('geak_home' in c.ins) && !c.ins.kernel_backend_dir), 'no GEAK path reaches any agent');
   }],
   ['kernel: the geak back end runs GEAK kernel_lane and the gain is integrated', async () => {
-    const r = await run({ mode: 'feature', task: 't', kernel_backend: 'geak', geak_home: FAKE_GEAK, gpu_ids: '3' }, withKernelHandoff('decode hot path'));
+    const r = await run({ mode: 'feature', task: 't', kernel_backend: 'geak', kernel_backend_dir: FAKE_GEAK, gpu_ids: '3' }, withKernelHandoff('decode hot path'));
     check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
     check(eqList(r.phases.slice(4, 8), ['Implement', 'Kernel', 'Implement', 'Verify']), `phases ${r.phases}`);
     const h = r.result.handoffs[0];
@@ -310,7 +311,7 @@ const scenarios = [
     check(r.result.done.map((d) => d.wp).includes('K-K-WP1'), 'integration package verified by the test engineer');
   }],
   ['kernel: a failing back end does not block the task', async () => {
-    const r = await run({ mode: 'feature', task: 't', kernel_backend: 'geak', geak_home: FAKE_GEAK }, withKernelHandoff('FAIL'));
+    const r = await run({ mode: 'feature', task: 't', kernel_backend: 'geak', kernel_backend_dir: FAKE_GEAK }, withKernelHandoff('FAIL'));
     check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
     check(r.result.handoffs[0].status === 'failed', `handoff ${JSON.stringify(r.result.handoffs[0])}`);
     check(!r.result.done.some((d) => d.wp.startsWith('K-')), 'nothing integrated');
@@ -326,12 +327,12 @@ const scenarios = [
   ['kernel: a perf plan with only kernel hand-offs runs on the selected back end', async () => {
     const plan = { 'architect:perf_plan': () => ({ work_packages: [], handoffs: [{ id: 'O2', owner: 'kernel_workflow', spec_path: `${RUN}/handoffs/O2/op_spec.md` },
       { id: 'O3', owner: 'hyperloom' }], perf_claim: '-6% TPOT', gate_ok: true }) };
-    const r = await run({ mode: 'perf', task: 'p', kernel_backend: 'geak', geak_home: FAKE_GEAK }, plan);
+    const r = await run({ mode: 'perf', task: 'p', kernel_backend: 'geak', kernel_backend_dir: FAKE_GEAK }, plan);
     check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
     check(eqList(r.phases, ['Setup', 'Profile', 'Plan', 'Kernel', 'Implement', 'Verify', 'Performance', 'PR', 'Report']), `phases ${r.phases}`);
     const byId = Object.fromEntries(r.result.handoffs.map((h) => [h.id, h.status]));
     check(byId.O2 === 'integrated' && byId.O3 === 'recorded', `statuses ${JSON.stringify(byId)}`);
-    const none = await run({ mode: 'perf', task: 'p', kernel_backend: 'geak', geak_home: FAKE_GEAK },
+    const none = await run({ mode: 'perf', task: 'p', kernel_backend: 'geak', kernel_backend_dir: FAKE_GEAK },
       { ...plan, 'kernel_liaison:collect': () => ({ status: 'no_gain', speedup: 1.01, integrate_wp: null }) });
     check(none.result.status === 'no_gain' && none.result.stopped_at === 'Kernel', `no gain: ${none.result.status}`);
   }],
@@ -341,7 +342,7 @@ const scenarios = [
     check(msg.includes('args.kernel_backend must be one of'), `unknown back end: ${msg}`);
     msg = '';
     try { await run({ mode: 'feature', task: 't', kernel_backend: 'geak' }); } catch (e) { msg = e.message; }
-    check(msg.includes('needs args.geak_home'), `geak without home: ${msg}`);
+    check(msg.includes('needs args.kernel_backend_dir'), `geak without its checkout: ${msg}`);
     msg = '';
     try { await run({ mode: 'feature', task: 't', kernel_backend: 'command' }); } catch (e) { msg = e.message; }
     check(msg.includes('needs args.kernel_backend_command'), `command without command: ${msg}`);

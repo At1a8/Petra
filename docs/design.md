@@ -93,8 +93,10 @@ scan     Collect → Dispatch → Report
 ```
 
 Kernel back ends (`kernel_backend`): `none` records hand-offs (default), `geak` nests GEAK's single-
-language kernel lane once (as GEAK's e2e_workflow does), `command` runs any other CLI. A gain is
-integrated by the implementer and judged by Petra's own gates; a failing back end never blocks a task.
+language kernel lane once from the checkout `kernel_backend_dir` (as GEAK's e2e_workflow does),
+`command` runs any other CLI. A gain is integrated by the implementer and judged by Petra's own gates;
+a failing back end never blocks a task. The `geak` back end is the only place a run uses GEAK;
+outside Claude Code, GEAK's workflow runtime is what executes `petra.js` (other CLIs, the dry run).
 
 - Gates G0–G5 (`validation_doctrine.md`), plus mode gates (`issue_repro`, `failing_test`) and the
   composability gates of every dimension a task touches.
@@ -155,7 +157,7 @@ CI pass rate, review rounds).
 Implemented: the orchestration with five modes and pluggable kernel back ends (none, geak, command), 15
 roles, the migrated knowledge base and templates,
 the task-collection and audit scripts, a dry run of every control path on GEAK's runtime, offline unit
-tests. Not yet: shared server control and A/B runners (GEAK's e2e adapters are referenced instead), a
+tests. Not yet: shared server control and A/B runners (the director writes a launch script per run), a
 persistent ecosystem-matrix store, queue → run automation, resume for modes other than `feature`,
 framework maps for vLLM and ATOM, and validation of the workflow itself on a real port against the
 hand-driven HiSparse V2 run.

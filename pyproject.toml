@@ -1,0 +1,5 @@
+[build-system]
+requires = ["setuptools>=40.8.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# Metadata and the build-time bootstrap hook are in setup.py (see its docstring for why).

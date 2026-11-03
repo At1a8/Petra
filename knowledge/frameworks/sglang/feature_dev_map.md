@@ -2,9 +2,9 @@
 
 Written against sglang `main` around commit `b057d5b3f1` (October 2026), verified while porting
 HiSparse V2 to DeepSeek-V4.1 on ROCm. Paths are relative to `python/sglang/srt/`. Names move between
-versions — re-locate each hook with `grep` before relying on it. For "how do I swap a kernel without
-touching site-packages", see GEAK's `$GEAK_HOME/e2e_workflow/knowledge/sglang_internals.md`; this file is about changing
-behaviour.
+versions — re-locate each hook with `grep` before relying on it. Swapping a kernel without touching
+site-packages is covered by GEAK (`e2e_workflow/knowledge/sglang_internals.md`); this file is about
+changing behaviour.
 
 ## 1. Scheduler loop and streams (`managers/scheduler.py`)
 

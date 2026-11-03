@@ -13,7 +13,7 @@ Verify:
 | Back end | What runs | Needs |
 |---|---|---|
 | `none` (default) | nothing: the hand-off package is written and listed in the report | — |
-| `geak` | GEAK's single-language kernel lane `kernel_workflow/kernel_lane.js`, nested once, the way GEAK's own `e2e_workflow` calls it | `geak_home`; GPUs from `gpu_ids`; `kernel_budget` optimization rounds (default 6) |
+| `geak` | GEAK's single-language kernel lane `kernel_workflow/kernel_lane.js`, nested once, the way GEAK's own `e2e_workflow` calls it | `kernel_backend_dir`, the GEAK checkout; GPUs from `gpu_ids`; `kernel_budget` optimization rounds (default 6) |
 | `command` | any other CLI: the kernel liaison runs `kernel_backend_command` with `{task_dir}`, `{out_dir}` and `{gpu_ids}` substituted and reads the JSON result it writes | `kernel_backend_command` |
 
 Adding a back end: a CLI needs no code (`command`); a native one is one branch in `kernelStage()` of
@@ -32,7 +32,7 @@ The implementer (functional kernel) or the architect (performance opportunity) w
 - the plug-in point (file : function) and how the kernel is built (JIT, AOT, Triton).
 
 The kernel liaison turns it into the back end's task format. For GEAK
-(`$GEAK_HOME/kernel_workflow/README.md`):
+(`<kernel_backend_dir>/kernel_workflow/README.md`):
 
 - `mode: "optimize"` — `kernel_path` holds the kernel source to edit and its test;
 - `mode: "author"` — `kernel_path` is an op task dir with the immutable oracle (`meta.json`,

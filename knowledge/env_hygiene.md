@@ -33,8 +33,11 @@ accidents.
 - Know the process name you are looking for: `sglang serve ...` and `python -m sglang.launch_server`
   differ. Probe the health endpoint rather than trusting a `pgrep` miss.
 - Killing: `pkill -f` patterns inside `bash -lc "..."` match the shell itself; use `'[s]glang serve'`
-  style patterns or GEAK's `$GEAK_HOME/e2e_workflow/scripts/server_teardown.sh` contract (identity
-  verified at launch).
+  style patterns. Better, record the server's identity at launch (its PID, and whether it leads its
+  own process group) and kill from that record: the PID and its descendants (`setsid` workers keep
+  VRAM otherwise), the whole group only when the launch proved the group is the server's. Never look
+  the group up at kill time: a recycled PID belongs to a stranger, and a teardown that did this once
+  TERMed a container's PID 1 (GEAK's `server_teardown.sh` contract).
 - Keep one server per GPU set; a previous server still holding the GPUs looks like an out-of-memory bug.
 - Running a test that needs a GPU the server occupies: stop the server first.
 

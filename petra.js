@@ -11,10 +11,10 @@ export const meta = {
     'PR or design to bring to AMD, an issue URL, a CI job or tracker cluster, or a performance goal) and ' +
     'args.framework_dir (the framework checkout to change, required except for scan). Optional: args.framework ' +
     '(default sglang), args.model_path, args.platform, args.gpu_ids, args.container, args.workload, args.exp_root, ' +
-    'args.geak_home, args.apply_prs (perf), args.sources and args.since (scan), args.stop_after (a phase title), ' +
+    'args.apply_prs (perf), args.sources and args.since (scan), args.stop_after (a phase title), ' +
     'args.resume_from="implement" with args.run_dir (feature: continue after a human approved design.md), ' +
-    'args.kernel_backend (none | geak | command; default none records kernel hand-offs only) with args.geak_home or ' +
-    'args.kernel_backend_command, args.kernel_budget, ' +
+    'args.kernel_backend (none | geak | command; default none records kernel hand-offs only) with ' +
+    'args.kernel_backend_dir (geak: the GEAK checkout) or args.kernel_backend_command (command), args.kernel_budget, ' +
     'args.max_fix_rounds, args.max_investigate_rounds, args.max_work_packages, args.agent_retries, args.agent_timeout_ms.',
   phases: [
     { title: 'Setup', detail: 'director: run dir, task branch and worktree, launch scripts, baseline (not in scan)' },
@@ -79,21 +79,22 @@ const EXP_ROOT = String(A.exp_root || `${PETRA}/exp`).replace(/\/+$/, '');
 // Kernel back ends: where kernel-level work goes (tuning a kernel Petra wrote for a feature, or a
 // kernel-level performance opportunity). knowledge/kernel_backends.md describes the contract.
 //   none     record the hand-off package in the report and run nothing (default)
-//   geak     GEAK's single-language kernel lane, nested once like GEAK's own e2e_workflow does
+//   geak     GEAK's single-language kernel lane from the checkout args.kernel_backend_dir, nested once
+//            like GEAK's own e2e_workflow does; the only place Petra uses GEAK
 //   command  any other CLI, run by the kernel liaison from args.kernel_backend_command
 const KERNEL_BACKENDS = ['none', 'geak', 'command'];
 const KERNEL_BACKEND = String(A.kernel_backend || 'none').trim().toLowerCase();
 if (!KERNEL_BACKENDS.includes(KERNEL_BACKEND)) {
   throw new Error(`args.kernel_backend must be one of ${KERNEL_BACKENDS.join(' | ')} (got ${JSON.stringify(A.kernel_backend)})`);
 }
-if (KERNEL_BACKEND === 'geak' && !A.geak_home) {
-  throw new Error('args.kernel_backend=geak needs args.geak_home (the GEAK checkout providing kernel_workflow/kernel_lane.js)');
+if (KERNEL_BACKEND === 'geak' && !A.kernel_backend_dir) {
+  throw new Error('args.kernel_backend=geak needs args.kernel_backend_dir (the GEAK checkout providing kernel_workflow/kernel_lane.js)');
 }
 if (KERNEL_BACKEND === 'command' && !A.kernel_backend_command) {
   throw new Error('args.kernel_backend=command needs args.kernel_backend_command ' +
     '(a shell command with {task_dir}, {out_dir} and {gpu_ids} placeholders)');
 }
-const GEAK_HOME = String(A.geak_home || '').replace(/\/+$/, '');
+const KERNEL_BACKEND_DIR = String(A.kernel_backend_dir || '').replace(/\/+$/, '');
 
 // Context handed to every agent; artifact paths are added as phases produce them.
 const C = {
@@ -108,8 +109,8 @@ const C = {
   gpu_ids: String(A.gpu_ids || ''),
   container: String(A.container || ''),
   workload: A.workload ? (typeof A.workload === 'string' ? A.workload : JSON.stringify(A.workload)) : '',
-  geak_home: GEAK_HOME,
   kernel_backend: KERNEL_BACKEND,
+  kernel_backend_dir: KERNEL_BACKEND_DIR,
   kernel_backend_command: String(A.kernel_backend_command || ''),
   kernel_budget: String(Math.max(1, int(A.kernel_budget, 6))),
   run_dir: '',
@@ -548,7 +549,7 @@ async function kernelStage() {
     if (KERNEL_BACKEND === 'geak') {
       const laneArgs = {
         kernel_path: pkg.task_dir,
-        workflow_dir: `${GEAK_HOME}/kernel_workflow`,
+        workflow_dir: `${KERNEL_BACKEND_DIR}/kernel_workflow`,
         mode: pkg.mode,
         budget: C.kernel_budget,
         gpu_ids: C.gpu_ids || '0',
@@ -560,7 +561,7 @@ async function kernelStage() {
         ...(pkg.workload_spec_path ? { workload_spec_path: pkg.workload_spec_path } : {}),
       };
       try {
-        result = backendSummary(await workflow({ scriptPath: `${GEAK_HOME}/kernel_workflow/kernel_lane.js` }, laneArgs));
+        result = backendSummary(await workflow({ scriptPath: `${KERNEL_BACKEND_DIR}/kernel_workflow/kernel_lane.js` }, laneArgs));
       } catch (e) {
         result = { error: String(e && e.message ? e.message : e).slice(0, 400) };
       }

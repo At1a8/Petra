@@ -31,20 +31,62 @@ Verify ([`knowledge/kernel_backends.md`](knowledge/kernel_backends.md)):
 | `kernel_backend` | What happens to a hand-off |
 |---|---|
 | `none` (default) | recorded in the report with its package; nothing runs |
-| `geak` | GEAK's `kernel_workflow/kernel_lane.js` runs it (nested once, as GEAK's e2e_workflow does) |
+| `geak` | GEAK's `kernel_workflow/kernel_lane.js` runs it from the GEAK checkout given as `kernel_backend_dir` (nested once, as GEAK's e2e_workflow does) |
 | `command` | any other CLI given as `kernel_backend_command` |
 
 A gain comes back as a work package: the implementer integrates it and Petra's own gates judge it. A
 back end that fails or finds nothing never blocks the task.
 
+## Install
+
+One command sets a machine up for Petra, the way GEAK's installer does: it clones the checkout and
+installs the Claude Code CLI that `petra.js` runs in (≥ 2.1.177, the first with the Workflow tool).
+
+```bash
+pip install -v "git+https://github.com/At1a8/Petra"   # clones Petra to ./Petra, installs Claude Code
+# or from a checkout, which is then used in place:
+git clone https://github.com/At1a8/Petra && cd Petra && pip install -v .
+```
+
+The bootstrap ([`petra/bootstrap.py`](petra/bootstrap.py)) runs while pip builds the wheel:
+
+1. clone Petra to `$PETRA_HOME`, unless you run it inside a checkout or the target already holds one;
+   any other non-empty directory is left untouched;
+2. install Claude Code with the native installer (`curl -fsSL https://claude.ai/install.sh | bash`,
+   into `~/.local/bin`), with npm as the fallback, or run `claude update` when the installed one is
+   older than 2.1.177;
+3. check git, docker, ROCm, Node.js and `GITHUB_TOKEN`/`GH_TOKEN` (detect only);
+4. print the next steps: add `~/.local/bin` to `PATH` if needed; give Claude Code API access
+   (`ANTHROPIC_API_KEY`; a gateway with `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`; or `claude`,
+   then `/login`); launch `IS_SANDBOX=1 claude --dangerously-skip-permissions` from the checkout.
+
+Every step is best-effort: a failure warns and never fails the install. pip shows the bootstrap's
+output only with `-v`, and a cached wheel skips it (`--no-cache-dir --force-reinstall` runs it again).
+Without pip, after the install or from inside a checkout:
+
+```bash
+python3 -m petra.bootstrap                 # all steps
+python3 -m petra.bootstrap --claude-only   # only install or update Claude Code
+python3 -m petra.bootstrap --check         # only the environment check
+```
+
+| Variable | Default | Effect |
+|---|---|---|
+| `PETRA_HOME` | `./Petra`, or the checkout you run from | where the checkout goes |
+| `PETRA_REPO_URL`, `PETRA_REF` | `https://github.com/At1a8/Petra.git`, its default branch | what to clone |
+| `CLAUDE_VERSION` | `latest` | version for the native installer |
+| `CLAUDE_BIN_DIR` | `~/.local/bin` | where the installer puts `claude` (for the `PATH` note) |
+| `PETRA_SKIP_BOOTSTRAP` | unset | set it to install the package without side effects (CI, images) |
+
 ## Running it
 
 Petra is a GEAK-style workflow: `petra.js` holds the control flow, `roles/` the agent instructions,
-`knowledge/` the method, `templates/` the artifacts. A GEAK checkout (`$GEAK_HOME`) provides the runtime
-outside Claude Code and the server adapters (`e2e_workflow/scripts/adapters/`), and the kernel lane when
-`kernel_backend=geak`.
+`knowledge/` the method, `templates/` the artifacts. Claude Code runs it with nothing else installed.
+GEAK is needed in two cases only: the `geak` kernel back end (`kernel_backend_dir`), and running
+`petra.js` outside Claude Code, which uses GEAK's workflow runtime (other CLIs below, the dry run).
 
-**Claude Code** (Workflow tool, ≥ 2.1.177), with permissions auto-approved as GEAK requires:
+**Claude Code** (Workflow tool, ≥ 2.1.177; see [Install](#install)), with permissions auto-approved
+as GEAK requires:
 
 ```
 use /home/fangyuan/Petra/petra.js with mode=issue, task=https://github.com/sgl-project/sglang/issues/38849,
@@ -54,7 +96,7 @@ petra_dir=/home/fangyuan/Petra, framework_dir=/path/to/sglang, gpu_ids=0-7, cont
 **Other CLIs** through GEAK's runtime (Node 20+):
 
 ```bash
-node $GEAK_HOME/interface/runtime/engine/run_workflow.mjs petra.js --agent codex \
+node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent codex \
   --args '{"mode":"scan","petra_dir":"'"$PWD"'","framework_dir":"/path/to/sglang"}'
 ```
 
@@ -66,8 +108,8 @@ node $GEAK_HOME/interface/runtime/engine/run_workflow.mjs petra.js --agent codex
 | `framework_dir` | the framework checkout; Petra works in a worktree of it (required except `scan`) |
 | `framework`, `model_path`, `platform`, `gpu_ids`, `container`, `workload` | target and environment |
 | `exp_root` | where run directories go (default `<petra_dir>/exp`) |
-| `geak_home` | GEAK checkout (adapters; the kernel lane for `kernel_backend=geak`) |
 | `kernel_backend` | `none` (default) \| `geak` \| `command`: where kernel hand-offs go |
+| `kernel_backend_dir` | `geak` back end: the GEAK checkout providing `kernel_workflow/kernel_lane.js` |
 | `kernel_backend_command` | `command` back end: shell command with `{task_dir}`, `{out_dir}`, `{gpu_ids}` |
 | `kernel_budget` | optimization rounds for the kernel back end (default 6) |
 | `apply_prs` | `perf`: candidate PRs to apply and A/B |
@@ -96,8 +138,8 @@ search API allows 10 requests a minute).
 ## Tests
 
 ```bash
-GEAK_HOME=/path/to/GEAK node tests/dry_run.mjs   # every control path of petra.js, scripted agents, no GPU
-python3 -m unittest discover -s tests             # the scripts' parsers and rules, offline
+GEAK_HOME=/path/to/GEAK node tests/dry_run.mjs   # every control path of petra.js on GEAK's runtime, no GPU
+python3 -m unittest discover -s tests             # the scripts' parsers and rules, the bootstrap; offline
 ```
 
 ## Layout
@@ -118,7 +160,9 @@ Petra/
 ├── templates/               # feature_spec, design, experiment_ledger, validation_report, pr_body,
 │                            # issue_triage, ci_triage, perf_analysis, task_queue
 ├── scripts/                 # task collection and audits
-├── tests/                   # dry run of petra.js, unit tests of the scripts
+├── petra/bootstrap.py       # installer: checkout, Claude Code CLI, environment check
+├── setup.py, pyproject.toml # packaging; setup.py runs the bootstrap when pip builds the wheel
+├── tests/                   # dry run of petra.js, unit tests of the scripts and the bootstrap
 └── docs/design.md
 ```
 

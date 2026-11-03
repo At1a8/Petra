@@ -19,7 +19,7 @@ Read: `knowledge/guardrails.md`, `knowledge/dev_methodology.md`, `knowledge/env_
 3. **Environment.** Pin the framework commit, container image, ROCm and PyTorch versions and the GPU set
    (`gpu_ids`; if empty, pick free GPUs and say which). Write one launch script with a mode switch
    (baseline / feature) and a tag; one log per launch; poll the health endpoint; read the effective
-   `server_args=` line. GEAK's adapters (`$GEAK_HOME/e2e_workflow/scripts/adapters/`) may be reused.
+   `server_args=` line.
 4. **Baseline.**
    - `feature`, `perf`: run each suite the task will need once per configuration, at least twice, and
      record the spread (`validation_doctrine.md`; for perf the workload in `workload`). The baseline
@@ -70,8 +70,9 @@ Inputs include `status`, `stopped_at`, `phases`, `handoffs` and every artifact p
   review, approve, post or hand over).
 - Always list hand-offs with their status (`recorded`, `integrated`, `no_gain`, `failed`,
   `integration_failed`) and package paths. For kernel hand-offs that were only recorded, give the
-  arguments that would run them later (`kernel_backend=geak` with `geak_home`, or a `command` back end;
-  `knowledge/kernel_backends.md`). List reply drafts. State the timezone of every time.
+  arguments that would run them later (`kernel_backend=geak` with `kernel_backend_dir`, or
+  `kernel_backend=command` with `kernel_backend_command`; `knowledge/kernel_backends.md`). List reply
+  drafts. State the timezone of every time.
 
 Return:
 
