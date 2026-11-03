@@ -1,0 +1,17 @@
+# feature_skills selector registry. One entry per skill; keep in sync with each SKILL.md frontmatter.
+# Not a ranking: filter by match (framework, feature, model_arch, platforms) and status, then read the
+# skill. validated skills are high-prior plans; stale ones are references to re-verify step by step.
+
+schema: {id, file, match, depends_on, validation_status}
+
+skills:
+- id: hisparse-v2
+  file: hisparse-v2/SKILL.md
+  match:
+    framework: sglang
+    framework_ref: b057d5b3f1
+    feature: hisparse_v2
+    model_arch: [deepseek_v4]      # DeepSeek-V4 / V4.1 compressed KV (compression ratios 1 and 2)
+    platforms: [rocm-gfx950]
+  depends_on: [sgl-project/sglang#32314]
+  validation_status: validated
