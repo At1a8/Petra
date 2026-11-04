@@ -6,20 +6,23 @@ export const meta = {
     'a same-pattern baseline, an investigation loop with controls), then fast (equal-budget G5), within the community ' +
     'rules of knowledge/guardrails.md. mode=scan collects and ranks tasks from all sources without changing code. ' +
     'Petra never pushes or posts: it prepares the branch, the PR body and the reply drafts for a human.',
-  whenToUse: 'Pass args.mode (feature | issue | ci | perf | scan; there is NO natural-language mode detection), ' +
-    'args.petra_dir (absolute path of the Petra checkout, required), args.task (required except for scan: an upstream ' +
-    'PR or design to bring to AMD, an issue URL, a CI job or tracker cluster, or a performance goal) and ' +
-    'args.framework_dir (the framework checkout to change, required except for scan). Optional: args.framework ' +
-    '(default sglang), args.model_path, args.platform, args.gpu_ids, args.container, args.workload, args.exp_root, ' +
-    'args.apply_prs (perf), args.sources and args.since (scan), args.stop_after (a phase title), ' +
-    'args.resume_from="implement" with args.run_dir (feature: continue after a human approved design.md), ' +
-    'args.kernel_backend (none | geak | command; default none records kernel hand-offs only) with ' +
-    'args.kernel_backend_dir (geak: the GEAK checkout) or args.kernel_backend_command (command), args.kernel_budget, ' +
-    'args.review_model (the reviewer\'s model, where the runtime takes one per call), ' +
-    'args.max_fix_rounds, args.max_investigate_rounds, args.max_review_rounds, args.max_work_packages, ' +
-    'args.agent_retries, args.agent_timeout_ms. mode=perf requires args.workload: the fixed benchmark every ' +
-    'measurement uses.',
+  whenToUse: 'Pass args.petra_dir (absolute path of the Petra checkout, required) and the task, either as ' +
+    'args.request (the user\'s words, any language; the Intake phase turns it into a task definition) or as the ' +
+    'task-definition fields of templates/task_definition.md: args.mode (feature | issue | ci | perf | scan), ' +
+    'args.task (the upstream PR or design, issue URL, CI job or tracker cluster, or performance goal), ' +
+    'args.framework_dir (the framework checkout), args.model_path (required for feature and perf), args.workload ' +
+    '(required for perf: the fixed benchmark every measurement uses), args.goal (what done means), args.framework ' +
+    '(default sglang), args.platform, args.gpu_ids, args.container, args.apply_prs (perf), args.sources and ' +
+    'args.since (scan), args.stop_after (a phase title), args.resume_from="implement" with args.run_dir (feature: ' +
+    'continue after a human approved design.md), args.kernel_backend (none | geak | command) with ' +
+    'args.kernel_backend_dir (geak) or args.kernel_backend_command (command), args.kernel_budget. A definition that ' +
+    'lacks something its mode needs returns status=needs_input with questions and starts nothing: answer them and ' +
+    'run again with the same args plus args.answers ({"<field>": <value>}). Operator settings: args.exp_root, ' +
+    'args.review_model (the reviewer\'s model, where the runtime takes one per call), args.max_fix_rounds, ' +
+    'args.max_investigate_rounds, args.max_review_rounds, args.max_work_packages, args.agent_retries, ' +
+    'args.agent_timeout_ms.',
   phases: [
+    { title: 'Intake', detail: 'intake: turn a request, or a definition with gaps, into a complete task definition; questions when something is missing' },
     { title: 'Setup', detail: 'director: run dir, task branch and worktree, launch scripts, baseline (not in scan)' },
     { title: 'Spec', detail: 'director: feature_spec.md with measurable acceptance criteria [feature]' },
     { title: 'Recon', detail: 'analyst: code map and assumption table, gap type and level [feature]' },
@@ -49,43 +52,8 @@ export const meta = {
 // agents are called only for judgement and for the work itself, and every agent
 // returns structured JSON whose gate fields this script reads.
 // ---------------------------------------------------------------------------
-const A = args || {};
+const RAW = args || {};
 const MODES = ['feature', 'issue', 'ci', 'perf', 'scan'];
-const MODE = String(A.mode != null ? A.mode : '').trim().toLowerCase();
-if (!MODES.includes(MODE)) {
-  throw new Error(`args.mode must be one of ${MODES.join(' | ')} (got ${JSON.stringify(A.mode)})`);
-}
-const PETRA = String(A.petra_dir || '').replace(/\/+$/, '');
-if (!PETRA) {
-  throw new Error('args.petra_dir is required: absolute path of the Petra checkout ' +
-    '(the directory containing petra.js, roles/, knowledge/ and templates/)');
-}
-if (MODE !== 'scan' && !A.task) throw new Error(`args.task is required for mode=${MODE}`);
-if (MODE !== 'scan' && !A.framework_dir) throw new Error(`args.framework_dir is required for mode=${MODE}`);
-if (MODE === 'perf' && !A.workload) {
-  throw new Error('args.workload is required for mode=perf: the fixed benchmark every measurement uses ' +
-    '(model, input/output lengths, concurrency, budget), fixed before any profile is read');
-}
-
-const int = (v, d) => {
-  const n = parseInt(v, 10);
-  return Number.isFinite(n) && n >= 0 ? n : d;
-};
-const MAX_FIX_ROUNDS = int(A.max_fix_rounds, 2);          // extra implement rounds per work package
-const MAX_INVESTIGATE = int(A.max_investigate_rounds, 3); // verify -> investigate -> verify cycles
-const MAX_REVIEW = int(A.max_review_rounds, 2);           // review -> fix -> verify -> review cycles
-const REVIEW_MODEL = String(A.review_model || '').trim();
-const MAX_WPS = Math.max(1, int(A.max_work_packages, 12));
-const AGENT_RETRIES = Math.max(1, int(A.agent_retries, 3));
-const AGENT_TIMEOUT_MS = int(A.agent_timeout_ms, 3 * 3600 * 1000);
-const STOP_AFTER = String(A.stop_after || '').trim().toLowerCase();
-const RESUME = String(A.resume_from || '').trim().toLowerCase();
-if (RESUME && !(MODE === 'feature' && RESUME === 'implement')) {
-  throw new Error('args.resume_from supports only "implement" in mode=feature (continue after an approved design)');
-}
-if (RESUME && !A.run_dir) throw new Error('args.resume_from needs args.run_dir (the run that stopped at Design)');
-const EXP_ROOT = String(A.exp_root || `${PETRA}/exp`).replace(/\/+$/, '');
-
 // Kernel back ends: where kernel-level work goes (tuning a kernel Petra wrote for a feature, or a
 // kernel-level performance opportunity). knowledge/kernel_backends.md describes the contract.
 //   none     record the hand-off package in the report and run nothing (default)
@@ -93,17 +61,185 @@ const EXP_ROOT = String(A.exp_root || `${PETRA}/exp`).replace(/\/+$/, '');
 //            like GEAK's own e2e_workflow does; the only place Petra uses GEAK
 //   command  any other CLI, run by the kernel liaison from args.kernel_backend_command
 const KERNEL_BACKENDS = ['none', 'geak', 'command'];
+const PETRA = String(RAW.petra_dir || '').replace(/\/+$/, '');
+if (!PETRA) {
+  throw new Error('args.petra_dir is required: absolute path of the Petra checkout ' +
+    '(the directory containing petra.js, roles/, knowledge/ and templates/)');
+}
+
+const int = (v, d) => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n >= 0 ? n : d;
+};
+const AGENT_RETRIES = Math.max(1, int(RAW.agent_retries, 3));
+const AGENT_TIMEOUT_MS = int(RAW.agent_timeout_ms, 3 * 3600 * 1000);
+let PHASE = '';
+const cfg = (o) => Object.entries(o)
+  .filter(([, v]) => v !== '' && v != null && !(Array.isArray(v) && v.length === 0))
+  .map(([k, v]) => `- ${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
+  .join('\n');
+
+// ---------------------------------------------------------------------------
+// Structured outputs. The role files describe every field; these schemas keep
+// the fields this script branches on mandatory.
+// ---------------------------------------------------------------------------
+const S = (props, required) => ({ type: 'object', properties: props, required: required || [] });
+const str = { type: 'string' };
+const bool = { type: 'boolean' };
+const num = { type: 'number' };
+const obj = { type: 'object' };
+const arr = (items) => (items ? { type: 'array', items } : { type: 'array' });
+const strs = arr(str);
+
+// ---------------------------------------------------------------------------
+// The task definition (templates/task_definition.md): the fields that define a task, named as the
+// arguments are. A request in plain words, or a definition with gaps, becomes a complete one in the
+// Intake phase before anything runs; operator settings (petra_dir, exp_root, budgets, review_model)
+// stay outside it.
+// ---------------------------------------------------------------------------
+const TASK_KEYS = ['mode', 'task', 'goal', 'framework', 'framework_dir', 'model_path', 'platform', 'gpu_ids',
+  'container', 'workload', 'apply_prs', 'sources', 'since', 'stop_after', 'resume_from', 'run_dir',
+  'kernel_backend', 'kernel_backend_dir', 'kernel_backend_command', 'kernel_budget'];
+// '' is accepted for the enums so an undecided field costs no schema retry; pick() drops it.
+const TASK_DEF = S({
+  mode: { type: 'string', enum: [...MODES, ''] },
+  task: str,
+  goal: str,
+  framework: str,
+  framework_dir: str,
+  model_path: str,
+  platform: str,
+  gpu_ids: str,
+  container: str,
+  workload: { type: ['object', 'string'] },
+  apply_prs: strs,
+  sources: strs,
+  since: str,
+  stop_after: str,
+  resume_from: str,
+  run_dir: str,
+  kernel_backend: { type: 'string', enum: [...KERNEL_BACKENDS, ''] },
+  kernel_backend_dir: str,
+  kernel_backend_command: str,
+});
+const INTAKE = S({
+  status: { type: 'string', enum: ['ready', 'needs_input', 'rejected'] },
+  task_def: TASK_DEF,
+  provenance: obj,
+  assumptions: strs,
+  questions: arr(S({ field: str, question: str, why: str, options: arr(), default: {} }, ['field', 'question', 'why'])),
+  reason: str,
+  summary: str,
+}, ['status', 'task_def', 'questions']);
+
+const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && o[k] != null && o[k] !== '').map((k) => [k, o[k]]));
+const asObject = (v) => {
+  if (v && typeof v === 'object') return v;
+  try {
+    const o = JSON.parse(String(v || ''));
+    return o && typeof o === 'object' ? o : {};
+  } catch (e) {
+    return {};
+  }
+};
+const TASK_PROMPTS = {
+  feature: 'Which upstream PR, design or paper should be brought to AMD (URL)?',
+  issue: 'Which issue (URL or <repo>#<n>)?',
+  ci: 'Which CI job or Failure Tracker cluster (URL, or tracker issue and cluster)?',
+  perf: 'Which performance goal (model, metric, target)?',
+};
+
+// What a definition still lacks before its mode can start; every gap is a question for the user.
+function missingFields(a) {
+  const qs = [];
+  const ask = (field, question, why, options) => qs.push({ field, question, why, ...(options ? { options } : {}) });
+  const mode = String(a.mode || '').trim().toLowerCase();
+  if (!MODES.includes(mode)) {
+    ask('mode', 'Which kind of task is this?', 'every phase after Intake depends on the mode', MODES);
+    return qs;
+  }
+  if (mode !== 'scan' && !a.task) ask('task', TASK_PROMPTS[mode], 'it is the source of truth the run works from');
+  if (mode !== 'scan' && !a.framework_dir) {
+    ask('framework_dir', 'Which framework checkout should Petra work in (absolute path)?', 'Setup creates the task worktree from it');
+  }
+  if ((mode === 'feature' || mode === 'perf') && !a.model_path) {
+    ask('model_path', 'Which model should the baseline and the gates run (local path)?', 'Setup runs the baseline on it');
+  }
+  if (mode === 'perf' && !a.workload) {
+    ask('workload', 'Which fixed workload should every measurement use (input/output lengths, concurrency, dataset)?',
+      'performance numbers count only on a workload fixed before any profile is read');
+  }
+  const kb = String(a.kernel_backend || 'none').trim().toLowerCase();
+  if (!KERNEL_BACKENDS.includes(kb)) {
+    ask('kernel_backend', 'Where should kernel hand-offs go?', 'the Kernel phase runs the chosen back end', KERNEL_BACKENDS);
+  }
+  if (kb === 'geak' && !a.kernel_backend_dir) {
+    ask('kernel_backend_dir', 'Where is the GEAK checkout (absolute path)?', 'the geak back end runs its kernel_workflow/kernel_lane.js');
+  }
+  if (kb === 'command' && !a.kernel_backend_command) {
+    ask('kernel_backend_command', 'Which command runs a kernel task (with {task_dir}, {out_dir} and {gpu_ids})?',
+      'the command back end runs it for every kernel hand-off');
+  }
+  const resume = String(a.resume_from || '').trim().toLowerCase();
+  if (resume && !(mode === 'feature' && resume === 'implement')) {
+    ask('resume_from', 'resume_from supports only "implement" in mode=feature: drop it, or is this a feature run?',
+      'only an approved feature design can be resumed', ['implement']);
+  }
+  if (resume && !a.run_dir) ask('run_dir', 'Which run stopped at Design (its run directory)?', 'the resumed run continues in it');
+  return qs;
+}
+
+// Fields the caller set win over answers, answers over what the intake inferred; the same completeness
+// check then applies to every definition, from a request or not. Nothing runs before it passes.
+async function intakeStage(raw) {
+  const request = String(raw.request || '').trim();
+  const given = pick(raw, TASK_KEYS);
+  const answers = pick(asObject(raw.answers), TASK_KEYS);
+  if (!request && missingFields({ ...answers, ...given }).length === 0) return { args: { ...raw, ...answers, ...given } };
+  enter('Intake');
+  const res = await call('intake', 'define', { request, given, answers, petra_dir: PETRA }, INTAKE, 'intake');
+  const merged = { ...(res && res.task_def ? pick(res.task_def, TASK_KEYS) : {}), ...answers, ...given };
+  const asked = res && res.status === 'needs_input' ? (res.questions || []) : [];
+  const questions = [...asked, ...missingFields(merged).filter((q) => !asked.some((a) => a.field === q.field))];
+  const provenance = (res && res.provenance) || {};
+  const assumptions = (res && res.assumptions) || [];
+  const stopped = (status, summary, extra) => {
+    log(`[petra] intake: ${status} — ${summary}`);
+    return { record: { mode: String(merged.mode || ''), status, stopped_at: 'Intake', run_dir: '', report_path: '',
+      summary, task_def: merged, provenance, assumptions,
+      phases: [{ phase: 'Intake', verdict: status, summary }], ...extra } };
+  };
+  if (res && res.status === 'rejected') {
+    const why = res.reason || res.summary || 'outside what Petra does';
+    return stopped('rejected', why, { reason: why });
+  }
+  if (questions.length) {
+    return stopped('needs_input', `missing: ${questions.map((q) => q.field).join(', ')}`, {
+      questions,
+      next: 'answer the questions, then run petra.js again with the same arguments plus answers={"<field>": <value>}',
+    });
+  }
+  return {
+    args: { ...raw, ...merged },
+    note: { phase: 'Intake', verdict: 'ready', summary: res ? (res.summary || 'task defined') : 'the intake returned nothing; started from the given fields' },
+    provenance,
+    assumptions,
+  };
+}
+
+const START = await intakeStage(RAW);
+if (START.record) return START.record;
+const A = START.args;
+const MODE = String(A.mode).trim().toLowerCase();
+const MAX_FIX_ROUNDS = int(A.max_fix_rounds, 2);          // extra implement rounds per work package
+const MAX_INVESTIGATE = int(A.max_investigate_rounds, 3); // verify -> investigate -> verify cycles
+const MAX_REVIEW = int(A.max_review_rounds, 2);           // review -> fix -> verify -> review cycles
+const REVIEW_MODEL = String(A.review_model || '').trim();
+const MAX_WPS = Math.max(1, int(A.max_work_packages, 12));
+const STOP_AFTER = String(A.stop_after || '').trim().toLowerCase();
+const RESUME = String(A.resume_from || '').trim().toLowerCase();
+const EXP_ROOT = String(A.exp_root || `${PETRA}/exp`).replace(/\/+$/, '');
 const KERNEL_BACKEND = String(A.kernel_backend || 'none').trim().toLowerCase();
-if (!KERNEL_BACKENDS.includes(KERNEL_BACKEND)) {
-  throw new Error(`args.kernel_backend must be one of ${KERNEL_BACKENDS.join(' | ')} (got ${JSON.stringify(A.kernel_backend)})`);
-}
-if (KERNEL_BACKEND === 'geak' && !A.kernel_backend_dir) {
-  throw new Error('args.kernel_backend=geak needs args.kernel_backend_dir (the GEAK checkout providing kernel_workflow/kernel_lane.js)');
-}
-if (KERNEL_BACKEND === 'command' && !A.kernel_backend_command) {
-  throw new Error('args.kernel_backend=command needs args.kernel_backend_command ' +
-    '(a shell command with {task_dir}, {out_dir} and {gpu_ids} placeholders)');
-}
 const KERNEL_BACKEND_DIR = String(A.kernel_backend_dir || '').replace(/\/+$/, '');
 
 // Context handed to every agent; artifact paths are added as phases produce them.
@@ -119,6 +255,8 @@ const C = {
   gpu_ids: String(A.gpu_ids || ''),
   container: String(A.container || ''),
   workload: A.workload ? (typeof A.workload === 'string' ? A.workload : JSON.stringify(A.workload)) : '',
+  goal: String(A.goal || ''),
+  assumptions: START.assumptions || [],
   kernel_backend: KERNEL_BACKEND,
   kernel_backend_dir: KERNEL_BACKEND_DIR,
   kernel_backend_command: String(A.kernel_backend_command || ''),
@@ -137,7 +275,10 @@ const R = {
   run_dir: '',
   report_path: '',
   summary: '',
-  phases: [],          // {phase, verdict, summary}
+  task_def: pick(A, TASK_KEYS), // the definition this run started from
+  provenance: START.provenance || {}, // per field: given | user | inferred | default
+  assumptions: START.assumptions || [],
+  phases: START.note ? [START.note] : [], // {phase, verdict, summary}
   done: [],            // verified work packages {wp, commit, evidence}
   handoffs: [],        // {id, owner: kernel_workflow | hyperloom, source, status, ...}
   known_issues: [],    // pre-existing failures proven by a same-pattern baseline control
@@ -145,16 +286,10 @@ const R = {
   attention: [],       // state a human must clean up before anything else runs there
 };
 
-const cfg = (o) => Object.entries(o)
-  .filter(([, v]) => v !== '' && v != null && !(Array.isArray(v) && v.length === 0))
-  .map(([k, v]) => `- ${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
-  .join('\n');
-
 function note(phaseTitle, verdict, summary) {
   R.phases.push({ phase: phaseTitle, verdict, summary: String(summary || '').slice(0, 600) });
 }
 
-let PHASE = '';
 function enter(title) {
   PHASE = title;
   phase(title);
@@ -170,15 +305,18 @@ const inputs = (extra) => ({
 });
 
 function rolePrompt(role, sub, ins) {
-  return `You are the ${role}. PHASE=${sub}. MODE=${MODE}.
-First Read ${PETRA}/roles/${role}.md and follow its instructions for PHASE=${sub}.
-Read ${PETRA}/knowledge/guardrails.md; its rules override anything else. Read every other knowledge
-file the role names under ${PETRA}/knowledge/ and fill the templates it names under ${PETRA}/templates/.
-Do all filesystem and shell work yourself. Write artifacts only under RUN_DIR (code changes only in the
+  const writes = role === 'intake'
+    ? 'No RUN_DIR exists yet: change nothing; every check you run is read-only. Never push, never post on GitHub.'
+    : `Write artifacts only under RUN_DIR (code changes only in the
 task worktree named in the inputs). Never push, never post on GitHub.
 As root in the container, give back what you write into checkouts another user owns: after every git
 write and before you return, run ${PETRA}/scripts/restore_owner.sh on the framework's .git, the task
-worktree and RUN_DIR (knowledge/env_hygiene.md).
+worktree and RUN_DIR (knowledge/env_hygiene.md).`;
+  return `You are the ${role}. PHASE=${sub}. MODE=${ins.mode || 'undecided'}.
+First Read ${PETRA}/roles/${role}.md and follow its instructions for PHASE=${sub}.
+Read ${PETRA}/knowledge/guardrails.md; its rules override anything else. Read every other knowledge
+file the role names under ${PETRA}/knowledge/ and fill the templates it names under ${PETRA}/templates/.
+Do all filesystem and shell work yourself. ${writes}
 
 ## Inputs
 ${cfg(ins)}
@@ -217,18 +355,7 @@ async function call(role, sub, ins, schema, label, opts) {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Structured outputs. The role files describe every field; these schemas keep
-// the fields this script branches on mandatory.
-// ---------------------------------------------------------------------------
-const S = (props, required) => ({ type: 'object', properties: props, required: required || [] });
-const str = { type: 'string' };
-const bool = { type: 'boolean' };
-const num = { type: 'number' };
-const obj = { type: 'object' };
-const arr = (items) => (items ? { type: 'array', items } : { type: 'array' });
-const strs = arr(str);
-
+// Schemas of the phases after Intake (the helpers are defined above).
 const WP = S({
   id: str,
   goal: str,

@@ -60,7 +60,8 @@ Inputs: `opportunities` from the profile (`analysis_path`) and `apply_prs` (cand
    `RUN_DIR/handoffs/<id>/` (`kernel_backends.md` §1); `kernel_backend` decides whether they run in this
    task. Flag or backend searches become `owner: "hyperloom"` and are only recorded. `owner` is one of
    these two values exactly.
-5. `perf_claim`: the conservative combined expectation (workload, metric, size).
+5. `perf_claim`: the conservative combined expectation (workload, metric, size). When `goal` states the
+   user's target, the claim addresses it or the plan says why it cannot be reached.
 6. Fill the Plan section of `perf_analysis.md`.
 
 Return:

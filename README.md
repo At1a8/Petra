@@ -17,10 +17,18 @@ Why it exists and how it maps onto the agreed design: [`docs/design.md`](docs/de
 | `issue` | an AMD user issue | Setup → Triage → Reproduce → Diagnose (skipped for an existing fix PR) → Implement → (Kernel) → Verify → (Performance) → Review → PR → Report | fix PR, or a conclusion (triaged, not reproduced, fixed on main, diagnosed); always a reply draft |
 | `ci` | a red AMD CI job or Failure Tracker cluster | Setup → Classify → Bisect → Implement → (Kernel) → Verify → Review → PR → Report | fix PR, or a handover for flaky/infrastructure failures |
 | `perf` | a system-level performance goal for a model and a fixed workload | Setup → Profile → Plan → Implement → (Kernel) → Verify → Performance → Review → PR → Report | PR with a measured win, or the change dropped; kernel-level items go to the kernel back end |
-| `scan` | none — collect tasks from upstream commits, AMD issues, CI failures and platform gates (host-sync leads on request) | Collect → Dispatch → Report | a ranked task queue with the arguments to start each task |
+| `scan` | none — collect tasks from upstream commits, AMD issues, CI failures and platform gates (host-sync leads on request) | Collect → Dispatch → Report | a ranked task queue with the task definition that starts each task |
 
 Phases in parentheses run only when they apply: Kernel when there is a kernel hand-off and
 `kernel_backend` is not `none`; Performance in issue mode for issues triaged as `performance`.
+
+A task starts from a **task definition** ([`templates/task_definition.md`](templates/task_definition.md)):
+the fields `petra.js` takes, the same names every role reads. It can be given as fields, or as a
+request in plain words: then an Intake phase runs first and turns the request into a definition,
+checking what it can without changing anything (the checkout, the model on this machine, the GPUs,
+the issue). A definition that still lacks something its mode needs — the issue, the checkout, the
+model for `feature` and `perf`, the fixed workload for `perf` — starts nothing and comes back as
+questions, one per field, each with options or a default. A complete definition skips the Intake.
 
 Every implementation runs one work package at a time; an independent test engineer re-runs its unit
 test and the feature-off check, and a package that keeps failing is rolled back. Verification failures
@@ -51,13 +59,15 @@ JSON; `petra.js` holds the schemas and branches only on their required fields. F
 the roles:
 
 - only the **implementer** edits framework source, and only in the task's worktree;
-- the roles that measure (test engineer, verify engineer, performance engineer) and the reviewer never
-  edit framework source; the measuring ones never reuse anyone else's numbers but run everything again;
+- the roles that measure (test engineer, verify engineer, performance engineer), the intake and the
+  reviewer never edit framework source; the measuring ones never reuse anyone else's numbers but run
+  everything again;
 - the **curator** edits only Petra's own `knowledge/` and leaves the edits uncommitted for review;
 - no role pushes or posts: the PR engineer returns the exact `git push`, issue replies are drafts.
 
 | Role | Phases | What it does |
 |---|---|---|
+| `intake` | Intake | turns a request in plain words, or a definition with gaps, into the task definition: decides the mode, fills fields with read-only checks, records defaults as assumptions, asks instead of guessing (a missing source of truth, model or workload, anything that would cost something to obtain), rejects what Petra does not do |
 | `director` | Setup, Spec, Report | creates the run directory, task branch and worktree, pins commit, image and GPUs and runs the baseline; writes the feature spec with measurable acceptance criteria; writes the final report for every outcome, with the next step for a human |
 | `scout` | Collect | gathers candidate tasks with the scripts below |
 | `dispatcher` | Dispatch | sets each candidate's gap type, level, CUDA dependencies with their AMD starting points, effort and priority, and ranks them into a queue |
@@ -159,8 +169,8 @@ framework_dir=/home/<you>/sglang
 
 The scan changes no code. It collects open AMD issues, red AMD CI, CUDA-first upstream changes and
 hardware gaps since the last scan (else the last 7 days), ranks them, and writes
-`exp/scan_<time>/task_queue.md` with the arguments that start each task. To take one task, stopping
-after the reproduction to confirm the environment:
+`exp/scan_<time>/task_queue.md` with the task definition that starts each task. To take one task,
+stopping after the reproduction to confirm the environment, name its fields:
 
 ```
 use /home/<you>/Petra/petra.js with mode=issue, task=https://github.com/sgl-project/sglang/issues/41299,
@@ -168,7 +178,17 @@ petra_dir=/home/<you>/Petra, framework_dir=/home/<you>/sglang, model_path=<weigh
 gpu_ids=0, stop_after=Reproduce
 ```
 
-Every run writes its report under `exp/`; [Running it](#running-it) lists all arguments.
+or say it in plain words and let the Intake phase write the definition:
+
+```
+use /home/<you>/Petra/petra.js with petra_dir=/home/<you>/Petra, request="DeepSeek-V4.1 decode
+is slow on MI355X, make it faster; my sglang is /home/<you>/sglang"
+```
+
+When something is missing (here: which fixed workload every measurement uses), the run starts
+nothing and returns `status: needs_input` with one question per field. Answer them in the chat;
+Claude Code runs `petra.js` again with the same arguments plus `answers={"workload": ...}`. Every run
+writes its report under `exp/`; [Running it](#running-it) lists all arguments.
 
 ### Re-running and options
 
@@ -203,11 +223,15 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 
 | Argument | Meaning |
 |---|---|
-| `mode` | `feature` \| `issue` \| `ci` \| `perf` \| `scan` (required; no natural-language detection) |
 | `petra_dir` | absolute path of this checkout (required) |
+| `request` | the task in plain words, any language; the Intake phase turns it into the fields below (`roles/intake.md`), and fields given with it win |
+| `answers` | replies to a `needs_input` result, `{"<field>": <value>}`, passed with the same arguments as before |
+| `mode` | `feature` \| `issue` \| `ci` \| `perf` \| `scan` (required; inferred from `request` when not given) |
 | `task` | the upstream PR/design, issue URL, CI job/cluster or performance goal (required except `scan`) |
+| `goal` | what done means, measurable when the mode measures; the spec and the performance plan address it |
 | `framework_dir` | the framework checkout; Petra works in a worktree of it (required except `scan`) |
-| `framework`, `model_path`, `platform`, `gpu_ids` | target and environment |
+| `model_path` | the model the baseline and the gates run (required for `feature` and `perf`) |
+| `framework`, `platform`, `gpu_ids` | target and environment (`sglang`; empty `gpu_ids` lets Setup pick free GPUs) |
 | `workload` | the benchmark every measurement uses, e.g. `{"isl":8192,"osl":1024,"conc":64}`; required for `perf`, fixed at Setup |
 | `container` | only when Petra runs on the host: the framework's container, reached with `docker exec` |
 | `exp_root` | where run directories go (default `<petra_dir>/exp`) |
@@ -222,10 +246,14 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `review_model` | the reviewer's model, passed with its agent call (GEAK's runtime takes a model per call; elsewhere it depends on the runtime) |
 | `max_fix_rounds`, `max_investigate_rounds`, `max_review_rounds`, `max_work_packages`, `agent_retries`, `agent_timeout_ms` | budgets |
 
-Human checkpoints: any `stop_after`; L3 tasks and designs the architect flags stop at Design
-(`awaiting_design_review`); a review the reviewer marks `blocked` stops before the PR; the PR engineer
-returns the exact `git push` instead of pushing; issue replies are drafts in the run directory. Every
-run ends with a report, whatever its status.
+Everything but `petra_dir`, `request`, `answers`, `exp_root`, `review_model` and the budgets is the task
+definition; the result of every run that started records the definition it used (`task_def`), where
+each field came from (`provenance`) and the intake's `assumptions`.
+
+Human checkpoints: questions from the Intake (`needs_input`); any `stop_after`; L3 tasks and designs
+the architect flags stop at Design (`awaiting_design_review`); a review the reviewer marks `blocked`
+stops before the PR; the PR engineer returns the exact `git push` instead of pushing; issue replies
+are drafts in the run directory. Every run ends with a report, whatever its status.
 
 The framework's own skills (sglang's `.agents/skills/`) are referenced in place, never copied: each
 role reads the ones [`knowledge/frameworks/sglang/skills.md`](knowledge/frameworks/sglang/skills.md)
@@ -263,9 +291,9 @@ python3 -m unittest discover -s tests             # the scripts' parsers and rul
 ```
 Petra/
 ├── petra.js                 # orchestration: five modes, gates, budgets, rollback, kernel back ends
-├── roles/                   # director, scout, dispatcher, analyst, architect, implementer, test_engineer,
-│                            # verify_engineer, investigator, perf_engineer, issue_triager, ci_guardian,
-│                            # kernel_liaison, reviewer, pr_engineer, curator
+├── roles/                   # intake, director, scout, dispatcher, analyst, architect, implementer,
+│                            # test_engineer, verify_engineer, investigator, perf_engineer, issue_triager,
+│                            # ci_guardian, kernel_liaison, reviewer, pr_engineer, curator
 ├── knowledge/
 │   ├── dev_methodology.md   # phases, artifacts, gates (the contract)
 │   ├── validation_doctrine.md, debugging_playbook.md, perf_evaluation.md, env_hygiene.md, pr_playbook.md
@@ -274,8 +302,8 @@ Petra/
 │   ├── frameworks/sglang/feature_dev_map.md, platforms/rocm.md, known_issues.md
 │   ├── frameworks/sglang/skills.md, platforms/rocm_skills.md   # sglang's own skills: index + ROCm notes
 │   └── feature_skills/      # validated plans per feature (hisparse-v2 first)
-├── templates/               # feature_spec, design, experiment_ledger, validation_report, pr_body,
-│                            # issue_triage, ci_triage, perf_analysis, task_queue
+├── templates/               # task_definition, feature_spec, design, experiment_ledger, validation_report,
+│                            # pr_body, issue_triage, ci_triage, perf_analysis, task_queue
 ├── scripts/                 # task collection, audits, run_docker.sh, restore_owner.sh
 ├── petra/bootstrap.py       # setup step 3, in the container; safe to re-run
 ├── setup.py, pyproject.toml # packaging; setup.py runs the bootstrap when pip builds the wheel

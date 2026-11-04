@@ -65,6 +65,7 @@ Where that stands, from sglang's history and issues (October 2026):
 
 | Design module | Petra |
 |---|---|
+| task intake: a request in plain words becomes a task definition every phase can start from; missing information comes back as questions | `intake` (define), `templates/task_definition.md`; `petra.js` checks every definition against what its mode needs |
 | upstream code scan, ecosystem matrix (feature × model × platform: available / unavailable) | `scout` (collect), `scripts/scan_upstream.py`, `knowledge/composability.md` §3 |
 | dispatch: gap type, CUDA dependencies and AMD counterparts, effort, priority by customer workload | `dispatcher`, `knowledge/dispatch.md` |
 | analysis: upstream design, do its assumptions hold on ROCm | `analyst` (recon: code map + assumption table) |
@@ -86,6 +87,7 @@ Where that stands, from sglang's history and issues (October 2026):
 judgement and for the work, and return structured JSON whose gate fields the script reads.
 
 ```
+(Intake: request or incomplete definition → task definition, or questions / rejected — nothing starts)
 feature  Setup → Spec → Recon → Design ─┐
 issue    Setup → Triage → Reproduce → Diagnose ─┤
 ci       Setup → Classify → Bisect ─────────────┼→ Implement (per WP: implementer → test_engineer, rollback on failure)
@@ -93,6 +95,12 @@ perf     Setup → Profile → Plan ──────────────�
                                                      → Verify (↔ Investigate) → Performance → Review → PR → Report
 scan     Collect → Dispatch → Report
 ```
+
+The task definition (`templates/task_definition.md`) is `petra.js`'s own arguments, so a definition
+from the intake, from a scan's queue or written by hand starts the same way. Fields given in the call
+win over the user's answers, answers over what the intake inferred; a deterministic check of what each
+mode needs runs on every definition, so an intake that calls a definition ready cannot start a run
+that lacks its model or its workload.
 
 Kernel back ends (`kernel_backend`): `none` records hand-offs (default), `geak` nests GEAK's single-
 language kernel lane once from the checkout `kernel_backend_dir` (as GEAK's e2e_workflow does),
@@ -114,7 +122,7 @@ their owner (`scripts/restore_owner.sh`), so host-side git and the human's push 
 - A failed verification goes to the investigator: a fix becomes new work packages; a failure the
   same-pattern baseline shares becomes a known issue and the gate is re-judged on the rest.
 - Budgets: fix rounds per work package, investigation rounds, work packages per task, agent retries.
-- Human checkpoints: `stop_after` any phase; L3 tasks and designs the architect flags stop at Design
+- Human checkpoints: the intake's questions (`needs_input`); `stop_after` any phase; L3 tasks and designs the architect flags stop at Design
   (`awaiting_design_review`) and continue with `resume_from: "implement"`; the PR is prepared, never
   pushed; issue replies are drafts.
 
@@ -165,8 +173,8 @@ CI pass rate, review rounds).
 
 ## 10. Status
 
-Implemented: the orchestration with five modes and pluggable kernel back ends (none, geak, command), 16
-roles, the migrated knowledge base and templates, the framework's own skills referenced in place with
+Implemented: the orchestration with five modes and pluggable kernel back ends (none, geak, command), an
+intake from plain-words requests, 17 roles, the migrated knowledge base and templates, the framework's own skills referenced in place with
 ROCm notes,
 the task-collection and audit scripts, a dry run of every control path on GEAK's runtime, offline unit
 tests. Not yet: shared server control and A/B runners (the director writes a launch script per run), a

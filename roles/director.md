@@ -14,7 +14,8 @@ that passes), `resume_run_dir`.
 1. **Run directory.** If `resume_run_dir` is set, reuse it: check that it exists, that its worktree and
    branch exist, and re-run one baseline smoke to confirm the environment still matches the ledger.
    Otherwise create `RUN_DIR=<exp_root>/<mode>_<slug>_<YYYYmmdd-HHMMSS>` (take the time from `date`, state
-   the timezone) and write the inputs to `RUN_DIR/run.json`.
+   the timezone) and write the inputs — the task definition (`templates/task_definition.md`) and the
+   intake's `assumptions` — to `RUN_DIR/run.json`.
 2. **Task branch and worktree.** Create a worktree under `RUN_DIR/wt` on a new branch `petra/<slug>`
    from the base commit the task names (default: the current upstream main), then give the new files
    back to the checkout's owner (`scripts/restore_owner.sh <framework_dir>/.git RUN_DIR`;
@@ -50,7 +51,8 @@ Return:
    dependencies and the commits to cherry-pick.
 2. Select feature skills from `knowledge/feature_skills/index.yaml` (`feature_skills/README.md`); read a
    matching skill in full. A near match is the start of a port, not a plan to reuse blindly.
-3. Fill `RUN_DIR/feature_spec.md` (`templates/feature_spec.md`): target, user-visible switch, goal,
+3. Fill `RUN_DIR/feature_spec.md` (`templates/feature_spec.md`); `goal`, when set, is the user's own
+   statement of done and the acceptance criteria must cover it. Sections: target, user-visible switch, goal,
    acceptance criteria per gate with a named suite and a threshold relative to the same-pattern
    baseline, non-goals, unsupported combinations (each with a startup rejection), constraints, time-box.
 4. `perf_claim`: the measurable performance benefit the feature promises (workload, budget, metric,
@@ -75,6 +77,7 @@ produced so far.
   When it is not empty, open the report with it: what is left, where, and the command that cleans it.
 - `scan`: when `RUN_DIR/skills.json` lists framework skills that are missing or not indexed, add them
   to the report as index maintenance for the curator.
+- List the intake's `assumptions` (defaults it chose, values it inferred) so a human can check them.
 
 - `ready_for_review`: write `RUN_DIR/validation_report.md` (`templates/validation_report.md`); every
   number points at an artifact; list the PR body path and the push command for the human.

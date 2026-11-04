@@ -10,11 +10,16 @@ gates:
 
 | Mode | Front end (replaces Spec / Recon / Design) | Then |
 |---|---|---|
-| `feature` | Spec → Recon → Design | Implement → Verify → Performance → PR → Report |
-| `issue` | Triage → Reproduce → Diagnose (`issue_triage.md`) | Implement → Verify, with the issue's reproduction as an extra gate → PR → Report |
-| `ci` | Classify → Bisect (`ci_triage.md`) | Implement → Verify, with the failing test as an extra gate → PR → Report |
-| `perf` | Profile → Plan (`system_perf.md`) | Implement → Verify (correctness first) → Performance → PR → Report |
+| `feature` | Spec → Recon → Design | Implement → Verify → Performance → Review → PR → Report |
+| `issue` | Triage → Reproduce → Diagnose (`issue_triage.md`) | Implement → Verify, with the issue's reproduction as an extra gate → Review → PR → Report |
+| `ci` | Classify → Bisect (`ci_triage.md`) | Implement → Verify, with the failing test as an extra gate → Review → PR → Report |
+| `perf` | Profile → Plan (`system_perf.md`) | Implement → Verify (correctness first) → Performance → Review → PR → Report |
 | `scan` | Collect → Dispatch | writes a ranked task queue and changes no code |
+
+Every mode starts from a task definition (`../templates/task_definition.md`). A request in plain
+words, or a definition missing something its mode needs, goes through the Intake first
+(`../roles/intake.md`): nothing runs until the definition is complete, and what the user did not say
+comes back as questions rather than guesses.
 
 ## Principles
 
@@ -107,7 +112,16 @@ practice. Artifacts live in the run's working directory; the templates are in `.
 - **Artifact:** performance section of `validation_report.md`.
 - **Gate:** the claimed benefit reproduces; no guard workload regresses beyond the noise band.
 
-### 7. Hygiene & PR
+### 7. Review — an independent read before the PR
+
+- A reviewer that did not write the change reads the diff and its evidence the way a maintainer would
+  (`../roles/reviewer.md`): the configurations no test ran, do-no-harm, the framework's conventions, a
+  fair benchmark.
+- **Artifact:** `review.md`.
+- **Gate:** approved with no blocker; requested changes are work packages that go back through
+  Implement and Verify (and Performance when the task claims a gain) before the next review.
+
+### 8. Hygiene & PR
 
 - Remove or gate debug code, run the formatters and linters the target repo enforces, register tests,
   update docs, sync with upstream, write the PR description from the report (`pr_playbook.md`).
@@ -115,7 +129,7 @@ practice. Artifacts live in the run's working directory; the templates are in `.
 - **Gate:** lint passes locally; feature-off check passes on the final commit; the PR description cites
   the validation artifacts.
 
-### 8. Report & learn
+### 9. Report & learn
 
 - `validation_report.md` summarises what was built, what was verified (with artifact paths), known
   limitations and open issues. Distil at most a few reusable lessons into the feature skill or the

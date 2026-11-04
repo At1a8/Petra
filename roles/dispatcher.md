@@ -20,7 +20,9 @@ Input: `candidates_path`.
 4. Ecosystem matrix: record every `feature × model × platform` cell whose state the evidence changes
    (`composability.md` §3).
 5. Write `RUN_DIR/task_queue.md` (`templates/task_queue.md`) and `RUN_DIR/queue.json`; for each of the
-   top entries, include the exact `petra.js` arguments that would start it.
+   top entries, include the task definition that starts it (`templates/task_definition.md`) with every
+   field its mode requires that the scan can establish; leave out what it cannot (a model that is not
+   on this machine, the workload of a performance task), and the run asks for it.
 
 Return:
 

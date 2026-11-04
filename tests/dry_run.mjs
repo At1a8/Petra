@@ -36,6 +36,7 @@ const WP = (id, extra) => ({ id, goal: `goal of ${id}`, kind: 'framework', files
 
 // Answers every role gives unless a scenario overrides them.
 const DEFAULTS = {
+  'intake:define': (ins) => ({ status: 'ready', task_def: ins.given || {}, provenance: {}, assumptions: [], questions: [], summary: 'as given' }),
   'director:setup': () => ({ run_dir: RUN, baseline_status: 'pass', baseline: '3/3 runs within spread', branch: 'petra/task', worktree: `${RUN}/wt` }),
   'director:spec': () => ({ spec_path: `${RUN}/feature_spec.md`, gates_measurable: true, perf_claim: '+20% output tok/s at equal HBM' }),
   'director:report': () => ({ report_path: `${RUN}/report.md`, summary: 'done' }),
@@ -100,7 +101,7 @@ function makeBackend(overrides) {
     const key = `${m[1]}:${m[2]}`;
     const n = (counts[key] = (counts[key] || 0) + 1);
     const ins = parseInputs(prompt);
-    calls.push({ key, n, ins, model });
+    calls.push({ key, n, ins, model, prompt });
     const f = (overrides && overrides[key]) || DEFAULTS[key];
     if (!f) throw new Error(`no scripted answer for ${key}`);
     const ans = f(ins, n);
@@ -121,8 +122,11 @@ async function run(args, overrides) {
       if (m) phases.push(m[1]);
     },
   });
-  const perfDefaults = args.mode === 'perf' ? { workload: '{"isl":8192,"osl":1024,"conc":64}' } : {};
-  const result = await rt.runScript(SCRIPT, { petra_dir: PETRA, framework_dir: '/tmp/sglang', agent_retries: 1, ...perfDefaults, ...args }, 0);
+  const modeDefaults = {
+    feature: { model_path: '/models/m' },
+    perf: { model_path: '/models/m', workload: '{"isl":8192,"osl":1024,"conc":64}' },
+  }[args.mode] || {};
+  const result = await rt.runScript(SCRIPT, { petra_dir: PETRA, framework_dir: '/tmp/sglang', agent_retries: 1, ...modeDefaults, ...args }, 0);
   return { result, phases, calls, keys: calls.map((c) => c.key) };
 }
 
@@ -133,6 +137,9 @@ function check(cond, msg) {
   else { failed++; console.error(`  FAIL: ${msg}`); }
 }
 const eqList = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// The run stopped at Intake with a question about `field`, before anything was set up.
+const asks = (r, field) => r.result.status === 'needs_input' && r.result.stopped_at === 'Intake'
+  && (r.result.questions || []).some((q) => q.field === field) && !r.keys.includes('director:setup');
 
 const scenarios = [
   ['feature: straight path to a reviewable PR', async () => {
@@ -403,16 +410,10 @@ const scenarios = [
       { ...plan, 'kernel_liaison:collect': () => ({ status: 'no_gain', speedup: 1.01, integrate_wp: null }) });
     check(none.result.status === 'no_gain' && none.result.stopped_at === 'Kernel', `no gain: ${none.result.status}`);
   }],
-  ['kernel: back-end arguments are validated', async () => {
-    let msg = '';
-    try { await run({ mode: 'feature', task: 't', kernel_backend: 'triton-magic' }); } catch (e) { msg = e.message; }
-    check(msg.includes('args.kernel_backend must be one of'), `unknown back end: ${msg}`);
-    msg = '';
-    try { await run({ mode: 'feature', task: 't', kernel_backend: 'geak' }); } catch (e) { msg = e.message; }
-    check(msg.includes('needs args.kernel_backend_dir'), `geak without its checkout: ${msg}`);
-    msg = '';
-    try { await run({ mode: 'feature', task: 't', kernel_backend: 'command' }); } catch (e) { msg = e.message; }
-    check(msg.includes('needs args.kernel_backend_command'), `command without command: ${msg}`);
+  ['kernel: back-end arguments are checked before anything starts', async () => {
+    check(asks(await run({ mode: 'feature', task: 't', kernel_backend: 'triton-magic' }), 'kernel_backend'), 'unknown back end asked');
+    check(asks(await run({ mode: 'feature', task: 't', kernel_backend: 'geak' }), 'kernel_backend_dir'), 'geak without its checkout asked');
+    check(asks(await run({ mode: 'feature', task: 't', kernel_backend: 'command' }), 'kernel_backend_command'), 'command without a command asked');
   }],
   ['review: requested changes are implemented, verified, measured and reviewed again', async () => {
     const r = await run({ mode: 'feature', task: 't' }, {
@@ -452,10 +453,10 @@ const scenarios = [
     check(reviews.length === 1 && reviews.every((c) => c.model === 'another-model'), `reviewer model: ${reviews.map((c) => c.model)}`);
     check(r.calls.filter((c) => c.key !== 'reviewer:review').every((c) => !c.model), 'the other roles keep the session model');
   }],
-  ['perf: a workload is required', async () => {
-    let msg = '';
-    try { await run({ mode: 'perf', task: 'p', workload: '' }); } catch (e) { msg = e.message; }
-    check(msg.includes('args.workload is required for mode=perf'), `no workload: ${msg}`);
+  ['perf: a workload and a model are required', async () => {
+    check(asks(await run({ mode: 'perf', task: 'p', workload: '' }), 'workload'), 'perf without a workload asked');
+    check(asks(await run({ mode: 'perf', task: 'p', model_path: '' }), 'model_path'), 'perf without a model asked');
+    check(asks(await run({ mode: 'feature', task: 't', model_path: '' }), 'model_path'), 'feature without a model asked');
   }],
   ['perf: a profile of the wrong path stops before any plan', async () => {
     const r = await run({ mode: 'perf', task: 'p' }, {
@@ -498,16 +499,73 @@ const scenarios = [
     });
     check(r.result.status === 'blocked' && r.result.stopped_at === 'Triage', `status ${r.result.status}`);
   }],
-  ['arguments: bad mode and missing task are rejected', async () => {
+  ['arguments: an invalid or incomplete definition comes back as questions', async () => {
+    check(asks(await run({ mode: 'magic', task: 't' }), 'mode'), 'unknown mode asked');
+    check(asks(await run({ mode: 'issue' }), 'task'), 'missing task asked');
+    check(asks(await run({ mode: 'issue', task: 't', framework_dir: '' }), 'framework_dir'), 'missing checkout asked');
+    check(asks(await run({ mode: 'issue', task: 't', resume_from: 'implement', run_dir: RUN }), 'resume_from'), 'resume outside feature asked');
     let msg = '';
-    try { await run({ mode: 'magic', task: 't' }); } catch (e) { msg = e.message; }
-    check(msg.includes('args.mode must be one of'), `bad mode: ${msg}`);
-    msg = '';
-    try { await run({ mode: 'issue' }); } catch (e) { msg = e.message; }
-    check(msg.includes('args.task is required'), `missing task: ${msg}`);
-    msg = '';
-    try { await run({ mode: 'issue', task: 't', resume_from: 'implement', run_dir: RUN }); } catch (e) { msg = e.message; }
-    check(msg.includes('resume_from supports only'), `resume outside feature: ${msg}`);
+    try { await run({ mode: 'issue', task: 't', petra_dir: '' }); } catch (e) { msg = e.message; }
+    check(msg.includes('args.petra_dir is required'), `no Petra checkout is still an error: ${msg}`);
+  }],
+  ['intake: a complete definition starts without it', async () => {
+    const r = await run({ mode: 'issue', task: 'i' });
+    check(!r.keys.includes('intake:define') && r.phases[0] === 'Setup', `phases ${r.phases}`);
+    check(r.result.task_def.mode === 'issue' && r.result.task_def.task === 'i', `task_def ${JSON.stringify(r.result.task_def)}`);
+  }],
+  ['intake: a request in plain words becomes a definition and the task runs', async () => {
+    const r = await run({ request: 'DeepSeek-V4.1 在 MI355X 上 decode 太慢，8k 输入 1k 输出 64 并发，目标提升 5%', framework_dir: '' }, {
+      'intake:define': () => ({ status: 'ready', summary: 'perf task',
+        task_def: { mode: 'perf', task: 'DeepSeek-V4.1 decode throughput on MI355X', goal: '+5% output tok/s at c64',
+          framework_dir: '/tmp/sglang', model_path: '/models/dsv41', workload: { isl: 8192, osl: 1024, conc: 64 } },
+        provenance: { mode: 'inferred', workload: 'inferred', gpu_ids: 'default' }, assumptions: ['Setup picks free GPUs'], questions: [] }),
+    });
+    check(r.result.status === 'ready_for_review' && r.phases[0] === 'Intake' && r.phases[1] === 'Setup', `${r.result.status}: ${r.phases}`);
+    const setup = r.calls.find((c) => c.key === 'director:setup');
+    check(setup && setup.ins.mode === 'perf' && setup.ins.goal === '+5% output tok/s at c64'
+      && setup.ins.workload.conc === 64, `setup sees the definition: ${JSON.stringify(setup && setup.ins)}`);
+    check(setup && setup.ins.assumptions.length === 1, 'assumptions reach the roles');
+    const intakeCall = r.calls.find((c) => c.key === 'intake:define');
+    check(intakeCall.prompt.includes('MODE=undecided') && intakeCall.prompt.includes('change nothing')
+      && !intakeCall.prompt.includes('restore_owner'), 'the intake is told it has no run directory and changes nothing');
+    check(setup.prompt.includes('MODE=perf') && setup.prompt.includes('restore_owner.sh'), 'later roles keep the ownership rule');
+    check(r.result.task_def.mode === 'perf' && r.result.assumptions.length === 1, 'the run records the definition it used');
+  }],
+  ['intake: missing information comes back as questions, and answers continue the task', async () => {
+    const intake = { 'intake:define': (ins) => (ins.answers && ins.answers.workload
+      ? { status: 'ready', task_def: { mode: 'perf', task: 'p', framework_dir: '/tmp/sglang', model_path: '/models/m', workload: ins.answers.workload }, questions: [] }
+      : { status: 'needs_input', task_def: { mode: 'perf', task: 'p', framework_dir: '/tmp/sglang', model_path: '/models/m' },
+        questions: [{ field: 'workload', question: 'Which workload?', why: 'fixed before profiling', default: '{"isl":8192}' }] }) };
+    const first = await run({ request: 'make it faster' }, intake);
+    check(asks(first, 'workload') && first.result.next.includes('answers='), `first: ${JSON.stringify(first.result.questions)}`);
+    check(first.result.run_dir === '' && !first.keys.includes('director:report'), 'nothing was created');
+    const again = await run({ request: 'make it faster', answers: { workload: { isl: 8192, osl: 1024, conc: 64 } } }, intake);
+    check(again.result.status === 'ready_for_review', `with the answer: ${again.result.status}`);
+    const asText = await run({ request: 'make it faster', answers: '{"workload": {"isl": 8192, "osl": 1024, "conc": 64}}' }, intake);
+    check(asText.result.status === 'ready_for_review', `answers as a JSON string: ${asText.result.status}`);
+  }],
+  ['intake: the code still checks a definition the intake calls ready', async () => {
+    const r = await run({ request: 'speed up decode' }, {
+      'intake:define': () => ({ status: 'ready', task_def: { mode: 'perf', task: 'p', framework_dir: '/tmp/sglang', model_path: '/models/m' }, questions: [] }),
+    });
+    check(asks(r, 'workload'), `a ready definition without a workload: ${r.result.status}`);
+  }],
+  ['intake: fields the caller set win over what the intake inferred', async () => {
+    const r = await run({ request: 'look at 38849', mode: 'issue', task: 'https://github.com/sgl-project/sglang/issues/38849' }, {
+      'intake:define': () => ({ status: 'ready', task_def: { mode: 'feature', task: 'something else', framework_dir: '/tmp/sglang', model_path: '/m' }, questions: [] }),
+    });
+    check(r.result.mode === 'issue' && r.result.task_def.task.endsWith('/38849'), `mode ${r.result.mode}, task ${r.result.task_def.task}`);
+  }],
+  ['intake: a request outside Petra is rejected with what to do instead', async () => {
+    const r = await run({ request: 'push my branch and comment on the PR' }, {
+      'intake:define': () => ({ status: 'rejected', task_def: {}, questions: [], reason: 'Petra never pushes or posts; run the push yourself' }),
+    });
+    check(r.result.status === 'rejected' && r.result.reason.includes('never pushes'), `status ${r.result.status}`);
+    check(!r.keys.includes('director:setup'), 'nothing started');
+  }],
+  ['intake: an intake that returns nothing falls back to the given fields', async () => {
+    const r = await run({ request: 'this issue', mode: 'issue', task: 'i' }, { 'intake:define': () => ({ status: 'maybe' }) });
+    check(r.result.status === 'ready_for_review' && r.result.phases[0].summary.includes('returned nothing'), `status ${r.result.status}`);
   }],
 ];
 
