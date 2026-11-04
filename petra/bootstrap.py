@@ -1,30 +1,34 @@
-"""Petra bootstrap: get a Petra checkout and the Claude Code CLI its workflow runs inside.
+"""Petra bootstrap: set up Petra where it runs; safe to run again at any time.
 
-`pip install git+https://github.com/At1a8/Petra` (or `pip install .` inside a checkout) runs this
-during the wheel build, following GEAK's installer:
+Petra runs inside a ROCm container as root, the way GEAK does. Claude Code is installed once on the
+host and the checkouts stay there; the container (scripts/run_docker.sh) mounts /home at the same path
+and is recreated on every start, so run this in every new container (README step 3).
 
-  1. clone the Petra repository to $PETRA_HOME (skipped when installing from inside a checkout);
-  2. install the Claude Code CLI (native installer, npm as a fallback), or update one older than the
-     version whose Workflow tool Petra needs;
-  3. check what Petra uses on the box (detect only);
-  4. print the next steps.
+Every step checks first, keeps what is already there and installs or creates only what is missing.
+Nothing is deleted, overwritten or re-cloned: a step that could only proceed by changing existing
+state warns and leaves it alone.
 
-Every step is best-effort: a failure warns and never aborts the install. Run it again at any time:
+  checkout   clone Petra to $PETRA_HOME, unless run inside a checkout or one is already there
+  claude-in  (container) link the host's Claude Code onto PATH instead of installing another
+  claude     install the Claude Code CLI if it is still missing; update one older than petra.js needs
+  path       put the CLI's directory on PATH for new shells (one marked block in ~/.bashrc)
+  git        (root in a container) trust the mounted checkouts, which belong to another user
+  shell      (root in a container) no __pycache__ in the checkouts, no Claude Code self-update, and
+             the keys kept on the host in ~/.petra_env
+  framework  (--framework-dir) clone the framework, with its whole history, if the directory is missing
+  checks     git, docker (host only), ROCm, sglang, Node.js, API access, GitHub token (detect only)
 
-  python3 -m petra.bootstrap                 # all steps
-  python3 -m petra.bootstrap --claude-only   # only install or update Claude Code
-  python3 -m petra.bootstrap --check         # only the environment check
+  python3 -B -m petra.bootstrap [--framework-dir DIR]
+  python3 -B -m petra.bootstrap --claude-only   # the claude and path steps
+  python3 -B -m petra.bootstrap --check         # the checks
 
-Environment:
-  PETRA_HOME            where the checkout goes (default: ./Petra under the directory you run from,
-                        or that directory itself when it is a Petra checkout)
-  PETRA_REPO_URL        repository to clone (default: https://github.com/At1a8/Petra.git)
-  PETRA_REF             branch or tag to clone (default: the repository's default branch)
-  CLAUDE_VERSION        native-installer target (default: latest)
-  CLAUDE_BIN_DIR        where the CLI lands (default: ~/.local/bin)
-  PETRA_SKIP_BOOTSTRAP  set to skip everything (CI, image builds)
+Environment (a flag wins over its variable):
+  PETRA_HOME, PETRA_REPO_URL, PETRA_REF       the checkout (default ./Petra, or the one you are in)
+  CLAUDE_VERSION, CLAUDE_BIN_DIR              native-installer target (latest), its bin dir (~/.local/bin)
+  PETRA_FRAMEWORK_DIR, PETRA_FRAMEWORK_REPO   --framework-dir, --framework-repo (default: sglang)
+  PETRA_SKIP_BOOTSTRAP                        set to skip everything (CI, image builds)
 
-Imported at build time, so standard library only.
+`pip install` runs it while building the wheel. Standard library only.
 """
 from __future__ import annotations
 
@@ -37,7 +41,17 @@ import sys
 
 CLAUDE_MIN_VERSION = "2.1.177"  # first Claude Code with the dynamic Workflow tool petra.js runs in
 DEFAULT_REPO_URL = "https://github.com/At1a8/Petra.git"
+DEFAULT_FRAMEWORK_REPO = "https://github.com/sgl-project/sglang.git"
 INSTALL_DOCS = "https://code.claude.com/docs/en/setup"
+CONTAINER_CLAUDE = "/usr/local/bin/claude"
+KEYS_FILE = ".petra_env"
+RC_BEGIN = "# >>> petra: Claude Code CLI on PATH >>>"
+RC_END = "# <<< petra: Claude Code CLI on PATH <<<"
+ENV_BEGIN = "# >>> petra: root in the container >>>"
+ENV_END = "# <<< petra: root in the container <<<"
+# Root in the container must not leave root-owned __pycache__ in the host's checkouts, and must not
+# update the host's Claude Code install (the host updates it).
+CONTAINER_ENV = {"PYTHONDONTWRITEBYTECODE": "1", "DISABLE_AUTOUPDATER": "1"}
 
 
 def _styles(stream) -> tuple[str, str]:
@@ -61,6 +75,55 @@ def _run(cmd, shell: bool = False):
     return subprocess.run(cmd, shell=shell)
 
 
+def _out(cmd) -> tuple[int, str, str]:
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as e:
+        return 127, "", str(e)
+    return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
+
+
+def _expand(path: str, env) -> str:
+    if path == "~" or path.startswith("~/"):
+        path = (env.get("HOME") or os.path.expanduser("~")) + path[1:]
+    return os.path.abspath(path)
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def in_container() -> bool:
+    return os.path.exists("/.dockerenv")
+
+
+def is_root() -> bool:
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+def give_back(path: str) -> None:
+    """chown -R what root wrote to the owner of the closest ancestor that is not root's."""
+    if not is_root():
+        return
+    d = os.path.dirname(os.path.abspath(path))
+    while True:
+        try:
+            st = os.stat(d)
+        except OSError:
+            st = None
+        if st and st.st_uid != 0:
+            _run(["chown", "-R", "%d:%d" % (st.st_uid, st.st_gid), path])
+            return
+        parent = os.path.dirname(d)
+        if parent == d:
+            return
+        d = parent
+
+
 def _invocation_dir(env) -> str:
     """The directory the user ran pip from. During `pip install git+...` the process cwd is a
     temporary build tree, but the shell's PWD still names the user's directory."""
@@ -76,19 +139,60 @@ def is_petra_checkout(path: str) -> bool:
             and os.path.isdir(os.path.join(path, "roles")))
 
 
-def settings(env=None) -> dict:
+def settings(env=None, opts=None) -> dict:
     env = os.environ if env is None else env
+    opts = opts or {}
     inv = _invocation_dir(env)
     home = env.get("PETRA_HOME") or (inv if is_petra_checkout(inv) else os.path.join(inv, "Petra"))
+    framework_dir = opts.get("framework_dir") or env.get("PETRA_FRAMEWORK_DIR") or ""
     return {
         "invocation_dir": inv,
-        "home": os.path.abspath(os.path.expanduser(home)),
+        "home": _expand(home, env),
         "repo_url": env.get("PETRA_REPO_URL") or DEFAULT_REPO_URL,
         "ref": env.get("PETRA_REF") or "",
         "claude_version": env.get("CLAUDE_VERSION") or "latest",
-        "claude_bin_dir": os.path.abspath(os.path.expanduser(
-            env.get("CLAUDE_BIN_DIR") or os.path.join("~", ".local", "bin"))),
+        "claude_bin_dir": _expand(env.get("CLAUDE_BIN_DIR") or "~/.local/bin", env),
+        "user_home": _expand("~", env),
+        "shell": env.get("SHELL") or "",
+        "framework_dir": _expand(framework_dir, env) if framework_dir else "",
+        "framework_repo": opts.get("framework_repo") or env.get("PETRA_FRAMEWORK_REPO") or DEFAULT_FRAMEWORK_REPO,
     }
+
+
+def owner_dirs(s: dict) -> list:
+    """Ancestors of the Petra checkout, closest first, owned by the checkout's owner: in the
+    container, the host home that holds that user's Claude Code and keys."""
+    try:
+        uid = os.stat(s["home"]).st_uid
+    except OSError:
+        return []
+    out, d = [], os.path.dirname(s["home"])
+    while d != os.path.dirname(d):
+        try:
+            if os.stat(d).st_uid == uid:
+                out.append(d)
+        except OSError:
+            pass
+        d = os.path.dirname(d)
+    return out
+
+
+def host_claude(s: dict) -> str:
+    for d in owner_dirs(s):
+        cand = os.path.join(d, ".local", "bin", "claude")
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return ""
+
+
+def keys_file(s: dict) -> str:
+    """~/.petra_env of the checkout's owner: next to their Claude Code, else in the topmost
+    directory they own."""
+    claude = host_claude(s)
+    if claude:
+        return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(claude))), KEYS_FILE)
+    dirs = owner_dirs(s)
+    return os.path.join(dirs[-1], KEYS_FILE) if dirs else ""
 
 
 def _ver_tuple(s: str) -> tuple:
@@ -103,105 +207,262 @@ def ver_ge(a: str, b: str) -> bool:
     return _ver_tuple(a) >= _ver_tuple(b)
 
 
-def claude_version() -> str:
-    """Leading semver of `claude --version` (e.g. '2.1.206 (Claude Code)'), '' when absent."""
-    if not _has("claude"):
-        return ""
-    try:
-        out = subprocess.run(["claude", "--version"], capture_output=True, text=True).stdout
-    except Exception:
-        return ""
-    m = re.search(r"\d+\.\d+\.\d+", out or "")
-    return m.group(0) if m else ""
+# --- checkout --------------------------------------------------------------------
 
-
-# --- 1. the checkout ---------------------------------------------------------
-
-def clone_repo(s: dict) -> bool:
+def ensure_checkout(s: dict) -> tuple[str, str]:
     home = s["home"]
-    if home == s["invocation_dir"] and is_petra_checkout(home):
-        log("inside a Petra checkout at %s; using it in place" % home)
-        return True
     if is_petra_checkout(home):
-        log("Petra checkout already at %s; leaving it as it is" % home)
-        return True
+        log("checkout: kept %s" % home)
+        return "kept", home
     if os.path.isdir(home) and os.listdir(home):
-        warn("%s exists and is not empty; leaving it untouched. Set PETRA_HOME to another path." % home)
-        return False
+        warn("checkout: %s exists and is not a Petra checkout; left untouched (set PETRA_HOME)" % home)
+        return "skipped", "%s is not empty" % home
     if not _has("git"):
-        warn("git not found; cannot clone Petra to %s" % home)
-        return False
+        warn("checkout: git not found; cannot clone Petra to %s" % home)
+        return "failed", "no git"
     os.makedirs(os.path.dirname(home) or ".", exist_ok=True)
     cmd = ["git", "clone"] + (["--branch", s["ref"]] if s["ref"] else []) + [s["repo_url"], home]
     if _run(cmd).returncode == 0:
-        log("Petra cloned to %s" % home)
-        return True
-    warn("git clone failed; check the network and your access to %s" % s["repo_url"])
-    return False
+        give_back(home)
+        log("checkout: cloned to %s" % home)
+        return "created", home
+    warn("checkout: git clone failed; check the network and your access to %s" % s["repo_url"])
+    return "failed", "git clone"
 
 
-# --- 2. Claude Code --------------------------------------------------------------
+# --- Claude Code -----------------------------------------------------------------
+
+def ensure_claude_link(s: dict) -> tuple[str, str]:
+    """In the container, call the host's Claude Code (seen through the /home mount) through a link on
+    PATH, so it is installed once and the host's updates reach every container."""
+    found = shutil.which("claude")
+    if found:
+        log("claude-in: kept (%s)" % found)
+        return "kept", found
+    host = host_claude(s)
+    if not host:
+        warn("claude-in: no Claude Code in the home that owns %s; install it on the host (README step 1)" % s["home"])
+        return "skipped", "no host install"
+    if os.path.lexists(CONTAINER_CLAUDE):
+        warn("claude-in: %s exists but is not on PATH; left as it is" % CONTAINER_CLAUDE)
+        return "skipped", "%s exists" % CONTAINER_CLAUDE
+    try:
+        os.symlink(host, CONTAINER_CLAUDE)
+    except OSError as e:
+        warn("claude-in: could not link %s (%s)" % (CONTAINER_CLAUDE, e))
+        return "failed", CONTAINER_CLAUDE
+    log("claude-in: linked %s -> %s" % (CONTAINER_CLAUDE, host))
+    return "added", "%s -> %s" % (CONTAINER_CLAUDE, host)
+
+
+def find_claude(s: dict) -> str:
+    """The claude on PATH, else one the native installer left in CLAUDE_BIN_DIR (not on PATH yet)."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    cand = os.path.join(s["claude_bin_dir"], "claude")
+    return cand if os.path.isfile(cand) and os.access(cand, os.X_OK) else ""
+
+
+def claude_version(path: str) -> str:
+    """Leading semver of `claude --version` (e.g. '2.1.206 (Claude Code)'), '' when absent."""
+    if not path:
+        return ""
+    rc, out, _ = _out([path, "--version"])
+    m = re.search(r"\d+\.\d+\.\d+", out)
+    return m.group(0) if rc == 0 and m else ""
+
 
 def install_claude(s: dict) -> bool:
     if _has("curl"):
         # The native installer downloads a large binary silently; minutes without output on a slow
         # link are a slow download, not a hang.
-        log("installing Claude Code (%s) with the native installer" % s["claude_version"])
+        log("claude: native installer (%s)" % s["claude_version"])
         cmd = "curl -fsSL --connect-timeout 20 https://claude.ai/install.sh | bash -s %s" % s["claude_version"]
         if _run(cmd, shell=True).returncode == 0:
             return True
-        warn("native installer failed")
+        warn("claude: native installer failed")
     if _has("npm"):
-        warn("falling back to npm: npm install -g @anthropic-ai/claude-code")
+        warn("claude: falling back to npm install -g @anthropic-ai/claude-code")
         if _run(["npm", "install", "-g", "@anthropic-ai/claude-code"]).returncode == 0:
             return True
-    warn("could not install Claude Code (need curl or npm, and network access). Manual setup: %s"
+    warn("claude: could not install Claude Code (need curl or npm, and network access). Manual setup: %s"
          % INSTALL_DOCS)
     return False
 
 
-def ensure_claude_code(s: dict) -> str:
-    """Make sure a Claude Code >= CLAUDE_MIN_VERSION is installed; return the version found after."""
-    cur = claude_version()
+def ensure_claude_code(s: dict) -> tuple[str, str]:
+    path = find_claude(s)
+    cur = claude_version(path)
     if cur and ver_ge(cur, CLAUDE_MIN_VERSION):
-        log("Claude Code %s present (>= %s)" % (cur, CLAUDE_MIN_VERSION))
-        return cur
+        log("claude: kept %s (%s)" % (cur, path))
+        return "kept", cur
     if cur:
-        warn("Claude Code %s is older than %s; updating" % (cur, CLAUDE_MIN_VERSION))
-        _run(["claude", "update"])
-        cur = claude_version()
+        warn("claude: %s is older than %s; updating it" % (cur, CLAUDE_MIN_VERSION))
+        _run([path, "update"])
+        cur = claude_version(find_claude(s))
         if cur and ver_ge(cur, CLAUDE_MIN_VERSION):
-            log("Claude Code updated to %s" % cur)
-            return cur
+            log("claude: updated to %s" % cur)
+            return "updated", cur
     else:
-        log("Claude Code CLI not found")
+        log("claude: not found; installing")
     install_claude(s)
-    cur = claude_version()
-    if not cur:
-        bin_claude = os.path.join(s["claude_bin_dir"], "claude")
-        if os.path.isfile(bin_claude):
-            log("Claude Code installed at %s (not on PATH yet)" % bin_claude)
-        else:
-            warn("claude not found after the install; see %s" % INSTALL_DOCS)
-    elif not ver_ge(cur, CLAUDE_MIN_VERSION):
-        warn("Claude Code %s is still older than %s; run `claude update` or set CLAUDE_VERSION"
+    cur = claude_version(find_claude(s))
+    if cur and ver_ge(cur, CLAUDE_MIN_VERSION):
+        log("claude: installed %s" % cur)
+        return "installed", cur
+    if cur:
+        warn("claude: %s is still older than %s; run `claude update` or set CLAUDE_VERSION"
              % (cur, CLAUDE_MIN_VERSION))
-    return cur
+    else:
+        warn("claude: not found after the install; see %s" % INSTALL_DOCS)
+    return "failed", cur
 
 
-# --- 3. environment (detect only) ------------------------------------------------
+# --- shell rc files --------------------------------------------------------------
+
+def rc_file(s: dict) -> str:
+    return os.path.join(s["user_home"], ".zshrc" if os.path.basename(s["shell"]) == "zsh" else ".bashrc")
+
+
+def _append(rc: str, block: str) -> bool:
+    try:
+        with open(rc, "a", encoding="utf-8") as f:
+            f.write(block)
+        return True
+    except OSError as e:
+        warn("could not append to %s (%s)" % (rc, e))
+        return False
+
+
+def _on_path(d: str, path_env: str) -> bool:
+    return any(os.path.abspath(p) == d for p in path_env.split(os.pathsep) if p)
+
+
+def ensure_path(s: dict, path_env: str | None = None) -> tuple[str, str]:
+    d = s["claude_bin_dir"]
+    path_env = os.environ.get("PATH", "") if path_env is None else path_env
+    if not os.path.isfile(os.path.join(d, "claude")):
+        return "skipped", "claude is not in %s" % d
+    if _on_path(d, path_env):
+        log("path: kept (%s is on PATH)" % d)
+        return "kept", d
+    rc = rc_file(s)
+    text = _read(rc)
+    names = {d}
+    if d.startswith(s["user_home"] + os.sep):
+        rel = d[len(s["user_home"]):]
+        names |= {"$HOME" + rel, "${HOME}" + rel, "~" + rel}
+    if RC_BEGIN in text or any(n in text for n in names):
+        log("path: kept (%s already puts %s on PATH)" % (rc, d))
+        return "kept", rc
+    block = '\n%s\ncase ":$PATH:" in *":%s:"*) ;; *) export PATH="%s:$PATH" ;; esac\n%s\n' % (RC_BEGIN, d, d, RC_END)
+    if not _append(rc, block):
+        return "failed", rc
+    log("path: added %s to %s" % (d, rc))
+    return "added", rc
+
+
+def ensure_shell_env(s: dict) -> tuple[str, str]:
+    rc = rc_file(s)
+    if ENV_BEGIN in _read(rc):
+        log("shell: kept (%s)" % rc)
+        return "kept", rc
+    lines = ["export %s=%s" % kv for kv in CONTAINER_ENV.items()]
+    keys = keys_file(s)
+    if keys:
+        lines.append('[ -r "%s" ] && . "%s"' % (keys, keys))
+    if not _append(rc, "\n%s\n%s\n%s\n" % (ENV_BEGIN, "\n".join(lines), ENV_END)):
+        return "failed", rc
+    log("shell: added %s%s to %s" % (", ".join(CONTAINER_ENV), " and %s" % keys if keys else "", rc))
+    return "added", rc
+
+
+# --- git, as root in a container -------------------------------------------------
+
+def ensure_git_trust(s: dict) -> tuple[str, str]:
+    """git refuses repositories owned by another user; in the container every mounted checkout is."""
+    if not _has("git"):
+        return "skipped", "no git"
+    _, out, _ = _out(["git", "config", "--global", "--get-all", "safe.directory"])
+    if "*" in out.splitlines():
+        log("git: kept (safe.directory '*')")
+        return "kept", "safe.directory '*'"
+    if _run(["git", "config", "--global", "--add", "safe.directory", "*"]).returncode == 0:
+        return "added", "safe.directory '*'"
+    warn("git: could not set safe.directory")
+    return "failed", "git config"
+
+
+# --- framework checkout ----------------------------------------------------------
+
+def _repo_key(url: str) -> str:
+    u = re.sub(r"\.git$", "", url.strip().rstrip("/"))
+    u = re.sub(r"^(?:ssh://)?git@([^:/]+)[:/]", r"https://\1/", u)
+    return u.lower()
+
+
+def ensure_framework(s: dict) -> tuple[str, str]:
+    d = s["framework_dir"]
+    if not d:
+        return "skipped", "no --framework-dir"
+    if os.path.exists(os.path.join(d, ".git")):
+        _, head, _ = _out(["git", "-C", d, "log", "-1", "--format=%h %cs"])
+        _, shallow, _ = _out(["git", "-C", d, "rev-parse", "--is-shallow-repository"])
+        _, origin, _ = _out(["git", "-C", d, "remote", "get-url", "origin"])
+        log("framework: kept %s (%s)" % (d, head or "no commits"))
+        if shallow == "true":
+            warn("framework: %s is a shallow clone; ci bisects and the upstream scan need its history. "
+                 "It is left as it is (`git -C %s fetch --unshallow` would deepen it)" % (d, d))
+        if origin and _repo_key(origin) != _repo_key(s["framework_repo"]):
+            warn("framework: %s tracks %s, not %s; kept as it is" % (d, origin, s["framework_repo"]))
+        return "kept", d
+    if os.path.isdir(d) and os.listdir(d):
+        warn("framework: %s exists and is not a git checkout; left untouched" % d)
+        return "skipped", "%s is not a git checkout" % d
+    if not _has("git"):
+        warn("framework: git not found; cannot clone to %s" % d)
+        return "failed", "no git"
+    os.makedirs(os.path.dirname(d) or ".", exist_ok=True)
+    # Blobless: the whole commit history for bisects and the upstream scan, file contents on demand.
+    if _run(["git", "clone", "--filter=blob:none", s["framework_repo"], d]).returncode == 0:
+        give_back(d)
+        log("framework: cloned %s to %s" % (s["framework_repo"], d))
+        return "created", d
+    warn("framework: git clone of %s failed" % s["framework_repo"])
+    return "failed", "git clone"
+
+
+# --- checks (detect only) --------------------------------------------------------
+
+def api_configured(env, user_home: str) -> bool:
+    return bool(env.get("ANTHROPIC_API_KEY") or env.get("ANTHROPIC_AUTH_TOKEN")
+                or (env.get("ANTHROPIC_BASE_URL") and env.get("ANTHROPIC_CUSTOM_HEADERS"))
+                or os.path.isfile(os.path.join(user_home, ".claude", ".credentials.json")))
+
+
+def _importable(module: str) -> bool:
+    import importlib.util
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
+
 
 def check_environment(env=None) -> dict:
     env = os.environ if env is None else env
-    found = {}
-    checks = [
-        ("git", _has("git"), "git is required: Petra works in a worktree of the framework checkout"),
-        ("docker", _has("docker"), "docker not found: Petra runs framework servers in ROCm containers"),
+    checks = [("git", _has("git"), "git is required: Petra works in a worktree of the framework checkout")]
+    if not in_container():
+        checks.append(("docker", _has("docker"), "docker not found: scripts/run_docker.sh starts Petra's container"))
+    checks += [
         ("rocm", _has("rocminfo") or _has("rocm-smi"), "ROCm not detected (rocminfo / rocm-smi): GPU work needs AMD Instinct GPUs with ROCm"),
+        ("sglang", _importable("sglang"), "sglang is not importable here: run Petra where the framework is installed (the container)"),
         ("node", _has("node"), "Node.js not found: needed only for tests/dry_run.mjs and for running petra.js outside Claude Code"),
+        ("api", api_configured(env, _expand("~", env)), "no Claude Code API access in this shell (see the next steps)"),
         ("github_token", bool(env.get("GITHUB_TOKEN") or env.get("GH_TOKEN")), "no GITHUB_TOKEN / GH_TOKEN: scan scripts fall back to 10 search requests per minute"),
     ]
-    log("checking what Petra uses (detect only)")
+    found = {}
+    log("checks (detect only):")
     for name, ok, hint in checks:
         found[name] = ok
         if ok:
@@ -211,64 +472,88 @@ def check_environment(env=None) -> dict:
     return found
 
 
-# --- 4. next steps ---------------------------------------------------------------
+# --- report ----------------------------------------------------------------------
 
-def next_steps(s: dict, path_env: str | None = None, claude_only: bool = False) -> str:
+def summary(results: list) -> str:
+    rows = ["  %-10s %-10s %s" % r for r in results]
+    return "summary (safe to re-run: what is already there is kept):\n" + "\n".join(rows)
+
+
+def next_steps(s: dict, statuses: dict, found: dict | None = None, path_env: str | None = None,
+               claude_only: bool = False) -> str:
     c_on, c_off = _styles(sys.stdout)
+    hl = lambda t: "%s%s%s" % (c_on, t, c_off)  # noqa: E731
     path_env = os.environ.get("PATH", "") if path_env is None else path_env
-    lines = []
-    on_path = any(os.path.abspath(p) == s["claude_bin_dir"] for p in path_env.split(os.pathsep) if p)
-    if not on_path and os.path.isfile(os.path.join(s["claude_bin_dir"], "claude")):
-        lines += ["NOTE: Claude Code is in %s, which is not on your PATH. Add it (~/.zshrc for zsh):" % s["claude_bin_dir"],
-                  "    %secho 'export PATH=\"%s:$PATH\"' >> ~/.bashrc && source ~/.bashrc%s" % (c_on, s["claude_bin_dir"], c_off),
-                  ""]
-    lines += [
-        "Next steps:",
-        "",
-        "1) Give Claude Code API access (pick ONE, and persist it in ~/.bashrc):",
-        "   a. Anthropic API:        %sexport ANTHROPIC_API_KEY=sk-ant-...%s" % (c_on, c_off),
-        "   b. a gateway or proxy:   %sexport ANTHROPIC_BASE_URL=https://your-gateway%s" % (c_on, c_off),
-        "                            %sexport ANTHROPIC_AUTH_TOKEN=your-token%s" % (c_on, c_off),
-        "      a gateway that wants its own header:",
-        "                            %sexport ANTHROPIC_CUSTOM_HEADERS=\"Header-Name: <key>\"%s" % (c_on, c_off),
-        "   c. interactive login:    %sclaude%s   then /login" % (c_on, c_off),
-    ]
+    steps = []
+    d = s["claude_bin_dir"]
+    reload_rc = statuses.get("shell") == "added" or (
+        os.path.isfile(os.path.join(d, "claude")) and not _on_path(d, path_env) and statuses.get("path") in ("added", "kept"))
+    if reload_rc:
+        steps.append(["Load the new settings into this shell (new shells have them):", hl("source %s" % rc_file(s))])
+    keys = keys_file(s) if in_container() else ""
+    api = (found or {}).get("api")
+    if api is None:
+        api = api_configured(os.environ, s["user_home"])
+    if not api and not (keys and os.path.isfile(keys)):
+        where = ("on the host, in %s (only you can read it; every container loads it):" % keys) if keys \
+            else "(pick one; keep it in %s):" % rc_file(s)
+        steps.append([
+            "Give Claude Code API access %s" % where,
+            "a. Anthropic API:       " + hl("export ANTHROPIC_API_KEY=sk-ant-..."),
+            "b. a gateway or proxy:  " + hl("export ANTHROPIC_BASE_URL=https://your-gateway"),
+            "                        " + hl("export ANTHROPIC_AUTH_TOKEN=your-token"),
+            "   (a gateway that wants its own header: " + hl('export ANTHROPIC_CUSTOM_HEADERS="Header-Name: <key>"') + ")",
+            "c. interactive login:   " + hl("claude") + "   then /login" + ("  (lost with the container)" if keys else ""),
+        ])
     if not claude_only:
-        lines += [
-            "",
-            "2) Launch Claude Code with permissions auto-approved, from the Petra checkout:",
-            "     %scd %s%s" % (c_on, s["home"], c_off),
-            "     %sIS_SANDBOX=1 claude --dangerously-skip-permissions%s" % (c_on, c_off),
-            "",
-            "3) Start a task, for example:",
-            "     use %s/petra.js with mode=scan, petra_dir=%s, framework_dir=/path/to/sglang" % (s["home"], s["home"]),
-        ]
+        fw = s["framework_dir"] or "/path/to/sglang"
+        steps.append(["Start Claude Code from the checkout, permissions auto-approved (README step 4):",
+                      hl("cd %s && IS_SANDBOX=1 claude --dangerously-skip-permissions" % s["home"])])
+        elsewhere = "" if in_container() else ", container=<container>"
+        steps.append(["Give it a task, e.g. collect and rank tasks, or take one issue:",
+                      "use %s/petra.js with mode=scan, petra_dir=%s, framework_dir=%s" % (s["home"], s["home"], fw),
+                      "use %s/petra.js with mode=issue, task=<issue URL>, petra_dir=%s, framework_dir=%s, gpu_ids=0%s"
+                      % (s["home"], s["home"], fw, elsewhere)])
+    lines = ["Next steps:"]
+    for i, (head, *body) in enumerate(steps, 1):
+        lines.append("%d) %s" % (i, head))
+        lines += ["     " + b for b in body]
     return "\n".join(lines)
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="python3 -m petra.bootstrap",
-                                 description="Set up Petra: checkout, Claude Code CLI, environment check.")
+    ap = argparse.ArgumentParser(prog="python3 -B -m petra.bootstrap",
+                                 description="Set up Petra where it runs (README step 3). "
+                                             "Safe to re-run: what is already there is kept.")
     g = ap.add_mutually_exclusive_group()
-    g.add_argument("--claude-only", action="store_true", help="only install or update Claude Code")
-    g.add_argument("--check", action="store_true", help="only check the environment")
+    g.add_argument("--claude-only", action="store_true", help="only the Claude Code and PATH steps")
+    g.add_argument("--check", action="store_true", help="only the environment checks")
+    ap.add_argument("--framework-dir", help="framework checkout for tasks; cloned only if missing (PETRA_FRAMEWORK_DIR)")
+    ap.add_argument("--framework-repo", help="repository to clone it from (default: sglang; PETRA_FRAMEWORK_REPO)")
     a = ap.parse_args([] if argv is None else argv)
 
     if os.environ.get("PETRA_SKIP_BOOTSTRAP"):
         log("PETRA_SKIP_BOOTSTRAP set; skipping")
         return 0
-    s = settings()
+    s = settings(opts={"framework_dir": a.framework_dir, "framework_repo": a.framework_repo})
     if a.check:
         check_environment()
         return 0
+    container = in_container()
+    steps = [] if a.claude_only else [("checkout", ensure_checkout)]
+    if container:
+        steps.append(("claude-in", ensure_claude_link))
+    steps += [("claude", ensure_claude_code), ("path", ensure_path)]
     if not a.claude_only:
-        log("PETRA_HOME=%s" % s["home"])
-        clone_repo(s)
-    ensure_claude_code(s)
-    if not a.claude_only:
-        check_environment()
-    print("\n[petra-bootstrap] done.\n\n" + next_steps(s, claude_only=a.claude_only), flush=True)
-    return 0
+        if container and is_root():
+            steps += [("git", ensure_git_trust), ("shell", ensure_shell_env)]
+        steps.append(("framework", ensure_framework))
+    results = [(name,) + step(s) for name, step in steps]
+    found = None if a.claude_only else check_environment()
+    statuses = {step: status for step, status, _ in results}
+    print("\n[petra-bootstrap] %s\n\n%s" % (summary(results), next_steps(s, statuses, found, claude_only=a.claude_only)),
+          flush=True)
+    return 1 if "failed" in statuses.values() else 0
 
 
 if __name__ == "__main__":

@@ -57,7 +57,8 @@ Inputs: `opportunities` from the profile (`analysis_path`) and `apply_prs` (cand
 3. Each PR in `apply_prs` becomes a `kind: "apply_pr"` package (apply, resolve, test).
 4. Kernel-level opportunities become `handoffs` with `owner: "kernel_workflow"` and a package under
    `RUN_DIR/handoffs/<id>/` (`kernel_backends.md` §1); `kernel_backend` decides whether they run in this
-   task. Flag or backend searches become `owner: "hyperloom"` and are only recorded.
+   task. Flag or backend searches become `owner: "hyperloom"` and are only recorded. `owner` is one of
+   these two values exactly.
 5. `perf_claim`: the conservative combined expectation (workload, metric, size).
 6. Fill the Plan section of `perf_analysis.md`.
 

@@ -98,6 +98,11 @@ language kernel lane once from the checkout `kernel_backend_dir` (as GEAK's e2e_
 a failing back end never blocks a task. The `geak` back end is the only place a run uses GEAK;
 outside Claude Code, GEAK's workflow runtime is what executes `petra.js` (other CLIs, the dry run).
 
+Petra runs inside the framework's ROCm container as root, as GEAK does, next to the GPUs and the
+framework's Python environment. Claude Code is installed once on the host and linked into the
+container; the checkouts stay on the host, and whatever a run writes into them as root goes back to
+their owner (`scripts/restore_owner.sh`), so host-side git and the human's push keep working.
+
 - Gates G0–G5 (`validation_doctrine.md`), plus mode gates (`issue_repro`, `failing_test`) and the
   composability gates of every dimension a task touches.
 - A failed verification goes to the investigator: a fix becomes new work packages; a failure the

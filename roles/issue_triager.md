@@ -17,8 +17,11 @@ Input: `task` (the issue URL or `<repo>#<n>`).
    (read a merged fix's diff against every point of the report), skipped tests.
 3. Decide the priority with the rubric and the judgement calls of §2; quote the rule you applied.
 4. Decide the action (§4): `reproduce`, `push_existing_pr`, `close_fixed`, `needs_info`, `not_amd`,
-   `plan`. `existing_prs` lists the open fix PRs (`#<n>`).
-5. Fill `RUN_DIR/issue_triage.md` (`templates/issue_triage.md`), including the reply draft; also save
+   `plan`. `existing_prs` lists the open fix PRs (`#<n>`). Every action that leads to a code change,
+   `push_existing_pr` included, is reproduced on main first; that reproduction is the gate the fix
+   must pass.
+5. `category`: exactly one of the values below; `performance` also runs the performance evaluation.
+6. Fill `RUN_DIR/issue_triage.md` (`templates/issue_triage.md`), including the reply draft; also save
    the reply alone as `RUN_DIR/reply_draft.md`.
 
 Return:
@@ -41,6 +44,8 @@ Inputs: the triage record, `expect_fixed` (true when the triage concluded the fi
    it becomes the `issue_repro` gate.
 4. With `expect_fixed`, run it on current main: `reproduced: false` means the fix holds.
 5. "Not reproduced" is a result: state the environment, the duration and the counts.
+6. `repro_cmd` is always the command you ran; when `reproduced` is true it must not be empty, or the
+   task stops here.
 
 Return:
 

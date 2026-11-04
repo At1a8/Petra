@@ -4,24 +4,31 @@ Most framework work runs in a container that bind-mounts the source tree from th
 usually runs as root; the host checkout belongs to a user. That split causes most environment
 accidents.
 
-## Git: run it on the host, as the owner of the checkout
+## Git: as root in the container, give the files back
 
-- Any git command run as root inside the container (fetch, push, commit, `pre-commit install`) leaves
-  root-owned files in `.git` (refs, objects, `ORIG_HEAD`, hooks). The next host-side git operation
-  fails with `cannot lock ref ... Permission denied` — and a fast-forward can stop **after** updating the
-  working tree and index but **before** moving the branch ref, leaving hundreds of staged changes on an
-  old HEAD.
-- Detect: `find .git ! -user "$(id -un)" | head`.
-- Repair: `docker exec <container> chown -R <uid>:<gid> <repo>/.git`, then finish the interrupted ref
-  update (`git update-ref refs/heads/<branch> <new> <old>`), then confirm `git status` is clean.
-- `pre-commit install` done inside the container writes a hook that calls the container's interpreter;
-  host commits then fail with "`pre-commit` not found". Either commit inside the container (and repair
-  ownership afterwards) or verify with pre-commit separately and commit with `--no-verify`.
+Petra runs git inside the container, as root, on checkouts that belong to a host user.
+
+- Any git write as root (worktree add, fetch, commit, cherry-pick, rebase, `pre-commit install`) leaves
+  root-owned files in `.git` (refs, objects, `ORIG_HEAD`, hooks) and in the worktree. The next host-side
+  git operation fails with `cannot lock ref ... Permission denied` — and a fast-forward can stop
+  **after** updating the working tree and index but **before** moving the branch ref, leaving hundreds
+  of staged changes on an old HEAD.
+- So after every git write, and before handing over a push command, give them back:
+  `<petra_dir>/scripts/restore_owner.sh <framework_dir>/.git <worktree> <run_dir>` (each path goes to
+  the owner of its closest ancestor that is not root's; nothing happens when not root).
+- Detect leftovers: `find <repo>/.git ! -user "$(stat -c %U <repo>)" | head`.
+- An update interrupted by a permission error: restore ownership, finish the ref update
+  (`git update-ref refs/heads/<branch> <new> <old>`), then confirm `git status` is clean.
+- git refuses a repository another user owns ("dubious ownership"); the container setup trusts the
+  mounted checkouts (`safe.directory '*'`). Python runs there with `PYTHONDONTWRITEBYTECODE=1`, so
+  imports leave no root-owned `__pycache__` in the checkouts.
+- `pre-commit install` inside the container writes a hook that calls the container's interpreter; a
+  commit from the host then fails with "`pre-commit` not found". Commit inside the container.
 - Do not run git or pre-commit from two places at once on the same checkout; formatters rewrite files
   in place and the two runs interleave.
 - Trial merges and lint runs go in a throwaway **worktree** (`git worktree add`), never in the checkout a
-  running server imports from. Files a container process writes into the worktree become root-owned —
-  remove the worktree from inside the container, then `git worktree prune`.
+  running server imports from; give it back like any other write, remove it with `git worktree remove`,
+  then `git worktree prune`.
 - Agents usually have no push credentials. Prepare the commit, then hand the user the exact `git push`.
 
 ## Servers

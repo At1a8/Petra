@@ -36,7 +36,7 @@ const WP = (id, extra) => ({ id, goal: `goal of ${id}`, kind: 'framework', files
 
 // Answers every role gives unless a scenario overrides them.
 const DEFAULTS = {
-  'director:setup': () => ({ run_dir: RUN, baseline: 'PASS - 3/3 runs within spread', branch: 'petra/task', worktree: `${RUN}/wt` }),
+  'director:setup': () => ({ run_dir: RUN, baseline_status: 'pass', baseline: '3/3 runs within spread', branch: 'petra/task', worktree: `${RUN}/wt` }),
   'director:spec': () => ({ spec_path: `${RUN}/feature_spec.md`, gates_measurable: true, perf_claim: '+20% output tok/s at equal HBM' }),
   'director:report': () => ({ report_path: `${RUN}/report.md`, summary: 'done' }),
   'analyst:recon': () => ({ design_path: `${RUN}/design.md`, subsystems: [{ name: 'scheduler', files: ['a.py'], hook: 'h' }], unmapped: [], gap_type: 'framework-only', level: 'L1' }),
@@ -208,10 +208,42 @@ const scenarios = [
   }],
   ['feature: baseline that does not reproduce blocks at Setup', async () => {
     const r = await run({ mode: 'feature', task: 't' }, {
-      'director:setup': () => ({ run_dir: RUN, baseline: 'FAIL - spread 9% > 2%' }),
+      'director:setup': () => ({ run_dir: RUN, baseline_status: 'fail', baseline: 'spread 9% > 2%' }),
     });
     check(r.result.status === 'blocked' && r.result.stopped_at === 'Setup', `status ${r.result.status}`);
     check(r.keys.includes('director:report'), 'blocked runs still get a report');
+  }],
+  ['setup: a skipped baseline is enough only where none is required', async () => {
+    const skip = { 'director:setup': () => ({ run_dir: RUN, baseline_status: 'skip', baseline: 'not needed yet' }) };
+    const feature = await run({ mode: 'feature', task: 't' }, skip);
+    check(feature.result.status === 'blocked' && feature.result.stopped_at === 'Setup', `feature with skip: ${feature.result.status}`);
+    const issue = await run({ mode: 'issue', task: 'i' }, skip);
+    check(issue.result.status === 'ready_for_review', `issue with skip: ${issue.result.status}`);
+    const prose = await run({ mode: 'issue', task: 'i' }, { 'director:setup': () => ({ run_dir: RUN, baseline: 'PASS - 3/3' }) });
+    check(prose.result.status === 'blocked' && prose.result.stopped_at === 'Setup', 'a baseline in prose without baseline_status is rejected');
+  }],
+  ['implement: done without a commit is a failed round', async () => {
+    const r = await run({ mode: 'feature', task: 't', max_fix_rounds: 1 }, {
+      'implementer:implement': (ins) => ({ wp: ins.work_package.id, status: 'done', commit: '', unit_test_cmd: 'pytest -q t.py' }),
+    });
+    check(r.result.status === 'blocked' && r.result.stopped_at === 'Implement', `status ${r.result.status}`);
+    check(!r.keys.includes('test_engineer:unit'), 'nothing to test without a commit');
+    const imp = r.result.phases.find((p) => p.phase === 'Implement');
+    check(imp && imp.summary.includes('without a commit'), `reason recorded: ${imp && imp.summary}`);
+  }],
+  ['rollback: an unclean rollback goes on the attention list of the report', async () => {
+    const r = await run({ mode: 'feature', task: 't', max_fix_rounds: 0 }, {
+      'test_engineer:unit': (ins) => ({ wp: ins.work_package.id, unit_pass: false, feature_off_unchanged: true, failure_summary: 'wrong' }),
+      'implementer:rollback': () => ({ wp: 'WP1', reset_to: 'base', clean: false }),
+    });
+    check(r.result.status === 'blocked' && r.result.attention.length === 1 && r.result.attention[0].wp === 'WP1',
+      `attention ${JSON.stringify(r.result.attention)}`);
+    const rep = r.calls.find((c) => c.key === 'director:report');
+    check(rep && Array.isArray(rep.ins.attention) && rep.ins.attention.length === 1, 'the report sees what a human must clean up');
+    const clean = await run({ mode: 'feature', task: 't', max_fix_rounds: 0 }, {
+      'test_engineer:unit': (ins) => ({ wp: ins.work_package.id, unit_pass: false, feature_off_unchanged: true, failure_summary: 'wrong' }),
+    });
+    check(clean.result.attention.length === 0, 'a clean rollback needs no attention');
   }],
   ['issue: reproduce, diagnose, fix, verify with the reproduction as a gate', async () => {
     const r = await run({ mode: 'issue', task: 'https://github.com/sgl-project/sglang/issues/38849' });
@@ -223,28 +255,48 @@ const scenarios = [
   }],
   ['issue: needs_info ends at triage with a reply draft', async () => {
     const r = await run({ mode: 'issue', task: 'i' }, {
-      'issue_triager:triage': () => ({ priority: 'P1', action: 'needs_info', triage_path: `${RUN}/t.md`, reply_draft_path: `${RUN}/reply.md` }),
+      'issue_triager:triage': () => ({ priority: 'P1', category: 'crash', action: 'needs_info', triage_path: `${RUN}/t.md`, reply_draft_path: `${RUN}/reply.md` }),
     });
     check(r.result.status === 'triaged' && r.result.stopped_at === 'Triage', `status ${r.result.status}`);
   }],
   ['issue: close_fixed that no longer reproduces', async () => {
     const r = await run({ mode: 'issue', task: 'i' }, {
-      'issue_triager:triage': () => ({ priority: 'P2', action: 'close_fixed', triage_path: `${RUN}/t.md` }),
-      'issue_triager:reproduce': (ins) => ({ reproduced: false, evidence: `expect_fixed=${ins.expect_fixed}; clean 3/3` }),
+      'issue_triager:triage': () => ({ priority: 'P2', category: 'crash', action: 'close_fixed', triage_path: `${RUN}/t.md` }),
+      'issue_triager:reproduce': (ins) => ({ reproduced: false, repro_cmd: 'bash repro.sh', evidence: `expect_fixed=${ins.expect_fixed}; clean 3/3` }),
     });
     check(r.result.status === 'fixed_on_main', `status ${r.result.status}`);
   }],
-  ['issue: push an existing PR', async () => {
+  ['issue: an existing fix PR is reproduced on main first and gated on that reproduction', async () => {
     const r = await run({ mode: 'issue', task: 'i' }, {
-      'issue_triager:triage': () => ({ priority: 'P1', action: 'push_existing_pr', existing_prs: ['#40872'], triage_path: `${RUN}/t.md` }),
+      'issue_triager:triage': () => ({ priority: 'P1', category: 'crash', action: 'push_existing_pr', existing_prs: ['#40872'], triage_path: `${RUN}/t.md` }),
     });
     check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
+    check(eqList(r.phases, ['Setup', 'Triage', 'Reproduce', 'Implement', 'Verify', 'PR', 'Report']), `phases ${r.phases}`);
     const im = r.calls.find((c) => c.key === 'implementer:implement');
     check(im && im.ins.work_package.kind === 'apply_pr' && im.ins.work_package.goal.includes('#40872'), 'apply_pr work package');
+    const v = r.calls.find((c) => c.key === 'verify_engineer:verify');
+    check(v && v.ins.extra_gates[0].cmd === 'bash repro.sh', `issue_repro gate carries the reproduction: ${JSON.stringify(v && v.ins.extra_gates)}`);
+  }],
+  ['issue: a reproduction without a command stops before any change', async () => {
+    const r = await run({ mode: 'issue', task: 'i' }, {
+      'issue_triager:reproduce': () => ({ reproduced: true, repro_cmd: '  ', evidence: 'segfault 3/3' }),
+    });
+    check(r.result.status === 'blocked' && r.result.stopped_at === 'Reproduce', `status ${r.result.status}`);
+    check(!r.keys.includes('investigator:diagnose'), 'no diagnosis without a reproduction command');
+  }],
+  ['issue: only a category from the list is accepted, and performance runs the evaluation', async () => {
+    const odd = await run({ mode: 'issue', task: 'i' }, {
+      'issue_triager:triage': () => ({ priority: 'P1', category: 'Performance', action: 'reproduce', triage_path: `${RUN}/t.md` }),
+    });
+    check(odd.result.status === 'blocked' && odd.result.stopped_at === 'Triage', `category Performance: ${odd.result.status}`);
+    const perf = await run({ mode: 'issue', task: 'i' }, {
+      'issue_triager:triage': () => ({ priority: 'P1', category: 'performance', action: 'reproduce', triage_path: `${RUN}/t.md` }),
+    });
+    check(perf.phases.includes('Performance') && perf.result.status === 'ready_for_review', `performance issue: ${perf.phases}`);
   }],
   ['ci: infrastructure is handed over', async () => {
     const r = await run({ mode: 'ci', task: 'tracker #45847 cluster NIXL' }, {
-      'ci_guardian:classify': () => ({ failure_class: 'infrastructure', evidence: 'UCX interface errno 19', triage_path: `${RUN}/ci.md` }),
+      'ci_guardian:classify': () => ({ failure_class: 'infrastructure', failing_test_cmd: '', evidence: 'UCX interface errno 19', triage_path: `${RUN}/ci.md` }),
     });
     check(r.result.status === 'handed_off', `status ${r.result.status}`);
     check(!r.keys.includes('ci_guardian:bisect'), 'no bisect for infrastructure');
@@ -261,6 +313,19 @@ const scenarios = [
       'ci_guardian:bisect': () => ({ culprit: 'maybe', confirmed: false, work_packages: [WP('WP1')] }),
     });
     check(r.result.status === 'blocked' && r.result.stopped_at === 'Bisect', `status ${r.result.status}`);
+  }],
+  ['ci: a regression without a failing test command stops before the bisect', async () => {
+    const r = await run({ mode: 'ci', task: 'c' }, {
+      'ci_guardian:classify': () => ({ failure_class: 'code_regression', failing_test_cmd: '', evidence: 'red since 10-21', triage_path: `${RUN}/ci.md` }),
+    });
+    check(r.result.status === 'blocked' && r.result.stopped_at === 'Classify', `status ${r.result.status}`);
+    check(!r.keys.includes('ci_guardian:bisect'), 'no bisect without the failing test');
+  }],
+  ['perf: a hand-off owner outside the list is rejected', async () => {
+    const r = await run({ mode: 'perf', task: 'p' }, {
+      'architect:perf_plan': () => ({ work_packages: [WP('WP1')], handoffs: [{ id: 'O2', owner: 'kernel-workflow' }], gate_ok: true }),
+    });
+    check(r.result.status === 'blocked' && r.result.stopped_at === 'Plan', `status ${r.result.status}`);
   }],
   ['perf: no measured win drops the change', async () => {
     const r = await run({ mode: 'perf', task: 'DeepSeek-V4.1 decode on MI355X' }, {

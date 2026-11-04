@@ -12,7 +12,7 @@ default: the previous scan under `exp_root`, else 7 days), `framework_dir`.
 
 1. Create `RUN_DIR=<exp_root>/scan_<YYYYmmdd-HHMMSS>` (time from `date`, timezone stated).
 2. Per source, run the script and keep its JSON under `RUN_DIR`:
-   - `upstream`: `git -C <framework_dir> fetch` (on the host, as the owner), then
+   - `upstream`: `git -C <framework_dir> fetch`, then `scripts/restore_owner.sh <framework_dir>/.git`, then
      `python3 <petra_dir>/scripts/scan_upstream.py --repo-dir <framework_dir> --since <since> --out RUN_DIR/upstream.json`
      — merged PRs, CUDA-first features and new CUDA-only gates.
    - `issues`: `python3 <petra_dir>/scripts/scan_issues.py --out RUN_DIR/issues.json`.

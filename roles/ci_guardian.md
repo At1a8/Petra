@@ -14,8 +14,8 @@ Input: `task` (a Failure Tracker issue and cluster, a job URL, or a CI issue).
    for tracker clusters (tests, lanes, statuses, since dates), plus the job logs.
 2. Classify it with `ci_triage.md` §2: `code_regression`, `dependency_bump`, `test_bug`, `flaky`,
    `infrastructure`. For `flaky`, rerun the test enough times to state a rate.
-3. Write the smallest command that reproduces the failure locally (`failing_test_cmd`) and the window
-   (last green → first red).
+3. Write the smallest command that reproduces the failure locally (`failing_test_cmd`, required for
+   every class; the fix is verified with it) and the window (last green → first red).
 4. Fill `RUN_DIR/ci_triage.md` (`templates/ci_triage.md`); for `infrastructure` and `flaky`, write the
    handover note there (who, what evidence).
 

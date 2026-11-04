@@ -10,7 +10,7 @@ Read: `knowledge/pr_playbook.md`, `knowledge/guardrails.md`, `knowledge/env_hygi
 1. **Hygiene:** remove debug instrumentation or leave it behind an off-by-default switch; no generated
    files (hipified `*.hip`, core dumps); the change is HIP-only or switch-gated, the CUDA path untouched.
 2. **Lint** with the target repository's tools where they are installed (sglang:
-   `pre-commit run --all-files`), respecting the host/container rules of `env_hygiene.md`.
+   `pre-commit run --all-files`), following the container rules of `env_hygiene.md`.
 3. **Tests and docs:** new tests registered where CI discovers them; user-visible switches documented.
 4. **Commits** tell the story: one per work package, follow-up fixes squashed into the commit they fix.
 5. **Upstream sync:** trial-merge main in a throwaway worktree; compile-check and smoke-test the merged
@@ -20,7 +20,9 @@ Read: `knowledge/pr_playbook.md`, `knowledge/guardrails.md`, `knowledge/env_hygi
    title in the repository's convention (sglang: `[Type] [Platform] scope: Description`). Note
    `Depends on #<n>` for unmerged dependencies. When the task was to push an existing PR, write the
    verification comment for that PR instead, at the same path.
-8. **Push command:** the exact `git push` the human should run. Do not run it.
+8. **Push command:** the exact `git push` the human should run. Do not run it. First give everything
+   back to the checkout's owner (`scripts/restore_owner.sh <framework_dir>/.git <worktree>`) and check
+   that nothing in `.git` is still root's (`env_hygiene.md`), so the push also works from the host.
 
 Return:
 

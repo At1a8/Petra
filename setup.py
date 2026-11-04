@@ -43,7 +43,7 @@ def run_bootstrap():
     except Exception as exc:
         sys.stderr.write("[petra-bootstrap WARN] bootstrap failed: %r\n" % (exc,))
         sys.stderr.write("[petra-bootstrap WARN] run `python3 -m petra.bootstrap` after the install, "
-                         "or see https://github.com/At1a8/Petra#install\n")
+                         "or see https://github.com/At1a8/Petra#setup\n")
 
 
 class BuildPyWithBootstrap(build_py):

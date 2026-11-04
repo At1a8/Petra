@@ -28,7 +28,8 @@ the previous round), `verified_work_packages`.
    - `apply_pr`: fetch the PR (`git fetch origin pull/<n>/head`), cherry-pick onto the task branch,
      resolve conflicts following upstream's intent, keep the author's commits intact.
    - `test` / `docs`: register tests where CI discovers them; document user-visible switches.
-4. Commit once per work package (`<wp>: <goal>`), on the host as the checkout owner. Never push.
+4. Commit once per work package (`<wp>: <goal>`), then give the files back to the checkout's owner
+   (`scripts/restore_owner.sh <framework_dir>/.git <worktree>`; `env_hygiene.md`). Never push.
 5. `unit_test_cmd`: the exact command the test engineer should run (absolute paths, environment).
 6. If the package cannot be done without a human decision or a missing dependency, return
    `status: "blocked"` with the reason in `notes`; do not improvise around it.
@@ -41,7 +42,8 @@ Return:
  "kernel_handoff": null, "notes": "<what changed; for blocked: why>"}
 ```
 
-`kernel_handoff`, when set: `{"op_spec_path": "...", "reference_path": "...", "test_cmd": "...",
+`commit` is required with `status: "done"`: a package reported done without one counts as a failed
+round. `kernel_handoff`, when set: `{"op_spec_path": "...", "reference_path": "...", "test_cmd": "...",
 "plug_in": "file:function", "reason": "..."}`.
 
 ## PHASE=rollback
@@ -57,3 +59,6 @@ Return:
 ```json
 {"wp": "WP2", "reset_to": "<sha>", "clean": true}
 ```
+
+`clean` is true only when `git status` in the worktree is clean after the reset; `false` puts the
+worktree on the report's list of state a human must clean up.

@@ -132,16 +132,13 @@ const R = {
   handoffs: [],        // {id, owner: kernel_workflow | hyperloom, source, status, ...}
   known_issues: [],    // pre-existing failures proven by a same-pattern baseline control
   knowledge_updates: [],
+  attention: [],       // state a human must clean up before anything else runs there
 };
 
 const cfg = (o) => Object.entries(o)
   .filter(([, v]) => v !== '' && v != null && !(Array.isArray(v) && v.length === 0))
   .map(([k, v]) => `- ${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
   .join('\n');
-
-// Gate fields are booleans or enums in the schemas; free-text status fields are
-// matched on their leading word ("PASS - 3/3 runs" opens the gate).
-const says = (v, w) => String(v == null ? '' : v).trim().toLowerCase().startsWith(w);
 
 function note(phaseTitle, verdict, summary) {
   R.phases.push({ phase: phaseTitle, verdict, summary: String(summary || '').slice(0, 600) });
@@ -169,6 +166,9 @@ Read ${PETRA}/knowledge/guardrails.md; its rules override anything else. Read ev
 file the role names under ${PETRA}/knowledge/ and fill the templates it names under ${PETRA}/templates/.
 Do all filesystem and shell work yourself. Write artifacts only under RUN_DIR (code changes only in the
 task worktree named in the inputs). Never push, never post on GitHub.
+As root in the container, give back what you write into checkouts another user owns: after every git
+write and before you return, run ${PETRA}/scripts/restore_owner.sh on the framework's .git, the task
+worktree and RUN_DIR (knowledge/env_hygiene.md).
 
 ## Inputs
 ${cfg(ins)}
@@ -229,7 +229,14 @@ const WP = S({
 }, ['id', 'goal', 'test']);
 const WPS = arr(WP);
 
-const SETUP = S({ run_dir: str, baseline: str, branch: str, worktree: str, notes: str }, ['run_dir', 'baseline']);
+const SETUP = S({
+  run_dir: str,
+  baseline_status: { type: 'string', enum: ['pass', 'fail', 'skip'] },
+  baseline: str,
+  branch: str,
+  worktree: str,
+  notes: str,
+}, ['run_dir', 'baseline_status']);
 const SPEC = S({ spec_path: str, gates_measurable: bool, perf_claim: str, skill: str, notes: str },
   ['spec_path', 'gates_measurable']);
 const RECON = S({
@@ -251,14 +258,17 @@ const DESIGN = S({
 }, ['work_packages', 'gate_ok']);
 const TRIAGE = S({
   priority: { type: 'string', enum: ['P0', 'P1', 'P2'] },
-  category: str,
+  category: {
+    type: 'string',
+    enum: ['wrong result', 'crash', 'startup or build failure', 'performance', 'feature request', 'CI', 'tool'],
+  },
   action: { type: 'string', enum: ['reproduce', 'push_existing_pr', 'close_fixed', 'needs_info', 'not_amd', 'plan'] },
   reason: str,
   existing_prs: strs,
   triage_path: str,
   reply_draft_path: str,
-}, ['priority', 'action', 'triage_path']);
-const REPRO = S({ reproduced: bool, repro_cmd: str, evidence: str }, ['reproduced', 'evidence']);
+}, ['priority', 'category', 'action', 'triage_path']);
+const REPRO = S({ reproduced: bool, repro_cmd: str, evidence: str }, ['reproduced', 'repro_cmd', 'evidence']);
 const DIAG = S({
   verdict: { type: 'string', enum: ['fix_needed', 'baseline_bug', 'not_amd_side', 'inconclusive'] },
   root_cause: str,
@@ -272,7 +282,7 @@ const CLASSIFY = S({
   window: str,
   evidence: str,
   triage_path: str,
-}, ['failure_class', 'evidence', 'triage_path']);
+}, ['failure_class', 'failing_test_cmd', 'evidence', 'triage_path']);
 const BISECT = S({ culprit: str, confirmed: bool, work_packages: WPS, evidence: str }, ['culprit', 'confirmed']);
 const PROFILE = S({
   analysis_path: str,
@@ -288,7 +298,11 @@ const PROFILE = S({
 }, ['analysis_path', 'opportunities']);
 const PERF_PLAN = S({
   work_packages: WPS,
-  handoffs: arr(S({ id: str, owner: str, spec_path: str }, ['id', 'owner'])),
+  handoffs: arr(S({
+    id: str,
+    owner: { type: 'string', enum: ['kernel_workflow', 'hyperloom'] },
+    spec_path: str,
+  }, ['id', 'owner'])),
   perf_claim: str,
   gate_ok: bool,
 }, ['work_packages', 'gate_ok']);
@@ -364,7 +378,7 @@ async function finish(status, at) {
   if (C.run_dir) {
     enter('Report');
     const rep = await call('director', 'report',
-      inputs({ status, stopped_at: at || '', phases: R.phases, handoffs: R.handoffs }), REPORT);
+      inputs({ status, stopped_at: at || '', phases: R.phases, handoffs: R.handoffs, attention: R.attention }), REPORT);
     if (rep) {
       R.report_path = rep.report_path;
       R.summary = rep.summary || '';
@@ -375,8 +389,18 @@ async function finish(status, at) {
   }
   R.run_dir = C.run_dir;
   log(`[petra] mode=${MODE} status=${status}${at ? ` at ${at}` : ''}` +
-    `${R.report_path ? ` report=${R.report_path}` : ''}`);
+    `${R.report_path ? ` report=${R.report_path}` : ''}${R.attention.length ? ` attention=${R.attention.length}` : ''}`);
   return R;
+}
+
+// A rollback that did not leave the worktree clean is recorded for a human; returns the note suffix.
+function rolledBack(rb, wpId) {
+  const clean = !!rb && rb.clean === true;
+  if (!clean) {
+    R.attention.push({ wp: wpId, worktree: C.worktree,
+      issue: rb ? `rollback to ${rb.reset_to} left the worktree unclean` : 'the rollback returned nothing' });
+  }
+  return rb ? ` (reset to ${rb.reset_to}${clean ? '' : ', worktree not clean'})` : ' (rollback returned nothing)';
 }
 
 async function setup(requireBaseline) {
@@ -387,9 +411,9 @@ async function setup(requireBaseline) {
     return false;
   }
   Object.assign(C, { run_dir: s.run_dir, branch: s.branch || C.branch, worktree: s.worktree || C.worktree });
-  const b = String(s.baseline || '');
-  const ok = says(b, 'pass') || (!requireBaseline && says(b, 'skip'));
-  note('Setup', ok ? 'pass' : 'fail', `baseline: ${b}${s.notes ? `; ${s.notes}` : ''}`);
+  const ok = s.baseline_status === 'pass' || (!requireBaseline && s.baseline_status === 'skip');
+  note('Setup', ok ? 'pass' : 'fail',
+    `baseline ${s.baseline_status}${s.baseline ? `: ${s.baseline}` : ''}${s.notes ? `; ${s.notes}` : ''}`);
   return ok;
 }
 
@@ -424,15 +448,19 @@ async function implementAll(wps) {
         feedback = im.notes || 'the implementer reported the work package blocked';
         break;
       }
+      if (!String(im.commit || '').trim()) {
+        feedback = 'the implementer reported done without a commit';
+        continue;
+      }
       if (im.kernel_handoff && !R.handoffs.some((h) => h.id === `K-${wp.id}`)) {
         R.handoffs.push({ id: `K-${wp.id}`, wp: wp.id, owner: 'kernel_workflow', source: 'implement', ...im.kernel_handoff });
       }
       const ut = await call('test_engineer', 'unit',
-        inputs({ work_package: wp, commit: im.commit || '', unit_test_cmd: im.unit_test_cmd || wp.test }),
+        inputs({ work_package: wp, commit: im.commit, unit_test_cmd: im.unit_test_cmd || wp.test }),
         UNIT, `test_engineer:${wp.id}#${round}`);
       if (ut && ut.unit_pass === true && ut.feature_off_unchanged === true) {
         passed = true;
-        R.done.push({ wp: wp.id, commit: im.commit || '', evidence: ut.evidence || '' });
+        R.done.push({ wp: wp.id, commit: im.commit, evidence: ut.evidence || '' });
       } else {
         feedback = ut ? (ut.failure_summary || 'the unit or feature-off gate failed') : 'the test engineer returned nothing';
       }
@@ -440,7 +468,7 @@ async function implementAll(wps) {
     if (!passed) {
       const rb = await call('implementer', 'rollback', inputs({ work_package: wp, reason: feedback }),
         ROLLBACK, `implementer:rollback:${wp.id}`);
-      note('Implement', 'fail', `${wp.id}: ${feedback}${rb ? ` (reset to ${rb.reset_to})` : ''}`);
+      note('Implement', 'fail', `${wp.id}: ${feedback}${rolledBack(rb, wp.id)}`);
       return { ok: false, failed_wp: wp.id, reason: feedback };
     }
   }
@@ -604,8 +632,9 @@ async function deliver(wps, extraGates, perfClaim, runPerf) {
     if (!perf.ok) {
       if (perf.claimed && !perf.reproduced && MODE === 'perf') {
         // A performance change without a measured win is dropped (guardrails.md).
-        await call('implementer', 'rollback', inputs({ work_package: { id: 'ALL', goal: 'drop the change', test: '' },
+        const rb = await call('implementer', 'rollback', inputs({ work_package: { id: 'ALL', goal: 'drop the change', test: '' },
           reason: 'no measured win' }), ROLLBACK, 'implementer:rollback:ALL');
+        note('Performance', 'dropped', `no measured win${rolledBack(rb, 'ALL')}`);
         return finish('dropped', 'Performance');
       }
       return finish('blocked', 'Performance');
@@ -691,13 +720,8 @@ async function runIssue() {
   if (['needs_info', 'not_amd', 'plan'].includes(tri.action)) return finish('triaged', 'Triage');
   if (stopHere('Triage')) return finish('stopped', 'Triage');
 
-  if (tri.action === 'push_existing_pr') {
-    const prs = (tri.existing_prs || []).join(', ');
-    const wp = { id: 'WP1', kind: 'apply_pr', goal: `apply the existing fix ${prs} and complete what verification needs`,
-      test: 'the issue reproduction no longer fails; the PR\'s own tests pass', files: [], depends_on: [] };
-    return deliver([wp], [{ gate: 'issue_repro', expect: 'fixed' }], '', tri.category === 'performance');
-  }
-
+  // Every path that changes code first reproduces on main: the reproduction is the issue_repro gate,
+  // also for an existing fix PR.
   enter('Reproduce');
   const expectFixed = tri.action === 'close_fixed';
   const rep = await call('issue_triager', 'reproduce', inputs({ expect_fixed: expectFixed }), REPRO);
@@ -705,10 +729,24 @@ async function runIssue() {
     note('Reproduce', 'fail', 'no reproduction result');
     return finish('blocked', 'Reproduce');
   }
-  C.repro_cmd = rep.repro_cmd || '';
+  const reproCmd = String(rep.repro_cmd || '').trim();
+  if (rep.reproduced && !reproCmd) {
+    note('Reproduce', 'fail', 'reproduced without a repro_cmd; the issue_repro gate needs one');
+    return finish('blocked', 'Reproduce');
+  }
+  C.repro_cmd = reproCmd;
   note('Reproduce', rep.reproduced ? 'reproduced' : 'not_reproduced', rep.evidence);
   if (!rep.reproduced) return finish(expectFixed ? 'fixed_on_main' : 'not_reproduced', 'Reproduce');
   if (stopHere('Reproduce')) return finish('stopped', 'Reproduce');
+
+  const gates = [{ gate: 'issue_repro', cmd: reproCmd, expect: 'fixed' }];
+  const runPerf = tri.category === 'performance';
+  if (tri.action === 'push_existing_pr') {
+    const prs = (tri.existing_prs || []).join(', ');
+    const wp = { id: 'WP1', kind: 'apply_pr', goal: `apply the existing fix ${prs} and complete what verification needs`,
+      test: 'the issue reproduction no longer fails; the PR\'s own tests pass', files: [], depends_on: [] };
+    return deliver([wp], gates, '', runPerf);
+  }
 
   enter('Diagnose');
   const dg = await call('investigator', 'diagnose', inputs(), DIAG);
@@ -721,8 +759,7 @@ async function runIssue() {
   if (dg.verdict !== 'fix_needed' || !(dg.work_packages || []).length) return finish('diagnosed', 'Diagnose');
   if (stopHere('Diagnose')) return finish('stopped', 'Diagnose');
 
-  return deliver(dg.work_packages, [{ gate: 'issue_repro', cmd: C.repro_cmd, expect: 'fixed' }], '',
-    tri.category === 'performance');
+  return deliver(dg.work_packages, gates, '', runPerf);
 }
 
 async function runCi() {
@@ -734,9 +771,15 @@ async function runCi() {
     note('Classify', 'fail', 'no classification');
     return finish('blocked', 'Classify');
   }
-  Object.assign(C, { triage_path: cl.triage_path, failing_test_cmd: cl.failing_test_cmd || '', failure_class: cl.failure_class });
+  const failingCmd = String(cl.failing_test_cmd || '').trim();
+  const handOver = cl.failure_class === 'infrastructure' || cl.failure_class === 'flaky';
+  Object.assign(C, { triage_path: cl.triage_path, failing_test_cmd: failingCmd, failure_class: cl.failure_class });
+  if (!handOver && !failingCmd) {
+    note('Classify', 'fail', `${cl.failure_class} without a failing_test_cmd; the failing_test gate needs one`);
+    return finish('blocked', 'Classify');
+  }
   note('Classify', cl.failure_class, cl.evidence);
-  if (cl.failure_class === 'infrastructure' || cl.failure_class === 'flaky') return finish('handed_off', 'Classify');
+  if (handOver) return finish('handed_off', 'Classify');
   if (stopHere('Classify')) return finish('stopped', 'Classify');
 
   enter('Bisect');
@@ -749,7 +792,7 @@ async function runCi() {
   note('Bisect', 'pass', `culprit ${bi.culprit}`);
   if (stopHere('Bisect')) return finish('stopped', 'Bisect');
 
-  return deliver(bi.work_packages, [{ gate: 'failing_test', cmd: C.failing_test_cmd, expect: 'pass on every lane it failed on' }],
+  return deliver(bi.work_packages, [{ gate: 'failing_test', cmd: failingCmd, expect: 'pass on every lane it failed on' }],
     '', false);
 }
 

@@ -35,6 +35,8 @@ Return:
 
 ## PHASE=run (kernel_backend=command)
 
+Inputs: `handoff` (its `id` names the output directory), `task_dir`, `kernel_backend_command`.
+
 1. Substitute `{task_dir}`, `{out_dir}` (`RUN_DIR/kernel/<id>/out`) and `{gpu_ids}` in
    `kernel_backend_command`; run it from `RUN_DIR`, logging to `RUN_DIR/kernel/<id>/run.log`.
 2. Report the exit code and the JSON result the command wrote.
