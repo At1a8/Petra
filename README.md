@@ -90,52 +90,70 @@ the roles:
 Petra runs inside a ROCm container, as root, the way GEAK does: Claude Code, Petra, git and the
 framework's servers and tests all run there, next to the GPUs and the framework's Python environment.
 The container is disposable (`scripts/run_docker.sh` starts a new one every time), so everything that
-has to last stays on the host under `/home`, mounted at the same path: Claude Code, installed once,
-the checkouts and your keys. What a run writes into the checkouts as root goes back to their owner
-([`scripts/restore_owner.sh`](scripts/restore_owner.sh), [`knowledge/env_hygiene.md`](knowledge/env_hygiene.md)),
+has to last stays on the host under `/home`, mounted at the same path: Claude Code, installed once, its
+state, the checkouts and your keys. What a run writes into the checkouts as root goes back to their
+owner ([`scripts/restore_owner.sh`](scripts/restore_owner.sh), [`knowledge/env_hygiene.md`](knowledge/env_hygiene.md)),
 so git on the host and your `git push` keep working.
 
 Apart from the container, which run_docker.sh replaces by design, every step can be run again: it
 checks first, keeps what is already there and adds only what is missing. Nothing is deleted,
 overwritten or re-cloned.
 
-### 1. Install Claude Code (host)
+### What the host needs
+
+- Linux with AMD Instinct GPUs (MI300 or MI350 series) and the ROCm driver loaded (`/dev/kfd` exists).
+- Docker you can run (your user in the `docker` group, or sudo), git, curl, python3 and tmux.
+- Network access to claude.ai, github.com and Docker Hub, and about 45 GB of disk per sglang image.
+- An Anthropic API key or a gateway; without either, a Claude subscription to log in with.
+- Model weights in a directory the container mounts (`/data`, `/mnt`, `/home`, ...): Petra never
+  downloads weights.
+
+### 1. Install Claude Code and keep your keys (host)
 
 ```bash
 command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash
 ~/.local/bin/claude --version    # 2.1.177 or later: the first with the Workflow tool petra.js runs in
+[ -e ~/.petra_env ] || (umask 077 && echo 'export ANTHROPIC_API_KEY=sk-ant-...' > ~/.petra_env)
 ```
 
-The native installer puts it in `~/.local/bin`, inside your home, which the container mounts; that is
-how the container calls it. The host keeps it up to date; the container never updates it.
+The native installer puts Claude Code in `~/.local/bin`, inside your home, which the container mounts;
+that is how the container calls it. The host keeps it up to date; the container never updates it.
+
+`~/.petra_env` keeps the keys on the host, readable only by you; every container loads it. A gateway
+goes in the same file (`ANTHROPIC_BASE_URL` with `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_CUSTOM_HEADERS`),
+and so does `GITHUB_TOKEN`, without which scan and issue runs get only 10 GitHub searches a minute.
+With a Claude subscription instead of a key, leave the key out and log in at the first start (step 4).
 
 ### 2. Start the container (host)
 
 ```bash
 [ -d ~/Petra/.git ] || git clone https://github.com/At1a8/Petra ~/Petra
-IMAGE=rocm/sgl-dev:<tag> ~/Petra/scripts/run_docker.sh    # NAME defaults to your user name
+tmux new -s petra                # a run takes hours; tmux keeps it through a dropped connection
+~/Petra/scripts/run_docker.sh    # NAME defaults to your user name
 ```
 
 [`scripts/run_docker.sh`](scripts/run_docker.sh) is the usual ROCm `run_docker.sh`: a privileged
-container with the GPUs, and `/home` and the data directories that exist (`/data`, `/mnt`, ...) mounted
-at the same paths, and a root shell in it. It removes the previous container of the same name first,
-so every start is a new container and nothing installed inside survives. A run_docker.sh of your own
-works the same way, as long as it mounts `/home` at the same path.
+container with the GPUs, `/home` and the data directories that exist (`/data`, `/mnt`, ...) mounted at
+the same paths, and a root shell in it.
+
+- **Image.** Tasks test the newest sglang, so it starts from the newest daily `rocm/sgl-dev` build for
+  ROCm 10 and MI35x ([`scripts/latest_image.py`](scripts/latest_image.py), e.g.
+  `v0.5.23-rocm10-mi35x-20261103`; the `miles` images on the same page are for reinforcement learning
+  and are skipped). A new day's image is pulled at its first use, about 43 GB. On MI30x, set
+  `IMAGE_VARIANT=rocm10-mi30x`; for a fixed image, `IMAGE=rocm/sgl-dev:<tag>`.
+- **What is tested.** The image provides PyTorch, aiter, sgl-kernel and its own copy of sglang. Petra
+  tests the code of the task's worktree, created from the current upstream main, by putting it first on
+  `PYTHONPATH`; the run records the image, the image's sglang version and the worktree's base commit.
+- **A new container every time.** It removes the previous container of the same name first, and with
+  it anything still running there. To get back into a running container, reattach tmux
+  (`tmux attach -t petra`) or open a shell in it (`docker exec -it <name> bash`); do not run
+  run_docker.sh again. A run_docker.sh of your own works too, as long as it mounts `/home` at the same
+  path.
 
 `claude` is not callable yet: the host's binary is in the container through the `/home` mount, but not
 on root's `PATH` (`claude: command not found`). Step 3 links it; nothing is installed in the container.
 
 ### 3. Install Petra (inside the container, in every new container)
-
-Keys stay on the host, in a file only you can read, which every container loads. On the host, once:
-
-```bash
-[ -e ~/.petra_env ] || (umask 077 && echo 'export ANTHROPIC_API_KEY=sk-ant-...' > ~/.petra_env)
-```
-
-A gateway goes in the same file (`ANTHROPIC_BASE_URL` with `ANTHROPIC_AUTH_TOKEN` or
-`ANTHROPIC_CUSTOM_HEADERS`), and so does `GITHUB_TOKEN`, without which scan and issue runs get only 10
-GitHub searches a minute. Then, in the container's shell:
 
 ```bash
 cd /home/<you>/Petra && python3 -B -m petra.bootstrap --framework-dir /home/<you>/sglang
@@ -146,21 +164,32 @@ claude --version    # the host's Claude Code
 | Step | In a new container |
 |---|---|
 | `claude` | a link `/usr/local/bin/claude` to the host's `/home/<you>/.local/bin/claude`; Claude Code is installed in the container only when the host has none |
+| Claude Code state | kept on the host in `/home/<you>/.petra/claude` (`CLAUDE_CONFIG_DIR`, apart from your own `~/.claude`): the first-start answers and a `/login` outlive the container |
 | git | trusts the mounted checkouts, which belong to you, not root (`safe.directory '*'`) |
 | shell | root's `~/.bashrc` gets `PYTHONDONTWRITEBYTECODE=1` (no root-owned `__pycache__` in your checkouts), `DISABLE_AUTOUPDATER=1` (the host updates Claude Code) and loads `/home/<you>/.petra_env` |
 | framework (`--framework-dir`) | an existing checkout is used as it is (a shallow one is reported, not deepened); a missing one is cloned with its whole history (`--filter=blob:none`) and given to you |
 | checks | GPUs, sglang, API access, `GITHUB_TOKEN` (detect only) |
 
 `python3 -B` keeps this first run from writing root-owned `__pycache__` into the checkout. The command
-never writes keys; `/login` inside a container also works, but is lost with the container.
+never writes keys.
 
-### 4. Demo prompt (inside the container)
+### 4. Start Claude Code and give it a task (inside the container)
 
 ```bash
 cd /home/<you>/Petra && IS_SANDBOX=1 claude --dangerously-skip-permissions
 ```
 
-`IS_SANDBOX=1` lets Claude Code auto-approve permissions as root, which Petra's agents need. Then ask:
+`IS_SANDBOX=1` lets Claude Code auto-approve permissions as root, which Petra's agents need. The very
+first start asks a few questions; the answers are kept in `/home/<you>/.petra/claude`, so later
+containers skip them. Three of the defaults would stop you:
+
+| Question | Answer |
+|---|---|
+| Do you want to use this API key? (the one from `~/.petra_env`) | **Yes**; the default, No, asks you to log in instead |
+| Is this a project you trust? | **Yes, I trust this folder**; the default exits |
+| Bypass Permissions mode | **Yes, I accept**; the default exits |
+
+Without a key, pick a login method instead and log in once. Then ask:
 
 ```
 use /home/<you>/Petra/petra.js with mode=scan, petra_dir=/home/<you>/Petra,
@@ -187,24 +216,34 @@ is slow on MI355X, make it faster; my sglang is /home/<you>/sglang"
 
 When something is missing (here: which fixed workload every measurement uses), the run starts
 nothing and returns `status: needs_input` with one question per field. Answer them in the chat;
-Claude Code runs `petra.js` again with the same arguments plus `answers={"workload": ...}`. Every run
-writes its report under `exp/`; [Running it](#running-it) lists all arguments.
+Claude Code runs `petra.js` again with the same arguments plus `answers={"workload": ...}`.
+[Running it](#running-it) lists all arguments.
+
+### 5. After a run (host)
+
+Every run leaves its report in its run directory under `/home/<you>/Petra/exp/` (`validation_report.md`
+when a PR is ready, `report.md` for any other outcome; the result names it as `report_path`), next to
+the task's worktree and branch, and what root wrote there is yours again. Petra never pushes: the
+report lists the PR body and the exact `git -C <worktree> push ...`. Run it on the host, where your git
+credentials are.
 
 ### Re-running and options
 
 Each step of `petra.bootstrap` reports `kept`, `installed`, `updated`, `added`, `created`, `skipped` or
 `failed`; a summary lists them, the next steps list only what is still missing, and the exit code is 1
-when a step failed. In a new container it re-creates the link and the git and shell settings in
-seconds and installs nothing. `--claude-only` runs only the Claude Code steps, `--check` only the
-checks. Inside a container, `cd /home/<you> && pip install -v git+https://github.com/At1a8/Petra` runs
+when a step failed. In a new container it re-creates the link and the git, shell and Claude Code state
+settings in seconds and installs nothing. `--claude-only` runs only the Claude Code steps, `--check`
+only the checks. Inside a container, `cd /home/<you> && pip install -v git+https://github.com/At1a8/Petra` runs
 step 3 the GEAK way (pip shows the output only with `-v`; a cached wheel skips it).
 
 | Variable | Used by | Default |
 |---|---|---|
-| `IMAGE`, `NAME`, `EXTRA_MOUNTS` | `scripts/run_docker.sh` | `rocm/sgl-dev:v0.5.22-rocm10-mi35x-20261021`; your user name; more directories to mount, space-separated |
+| `IMAGE` | `scripts/run_docker.sh` | the newest daily `rocm/sgl-dev` image of `IMAGE_VARIANT` (the newest local one when Docker Hub cannot be reached) |
+| `IMAGE_VARIANT`, `NAME`, `EXTRA_MOUNTS` | `scripts/run_docker.sh` | `rocm10-mi35x`; your user name; more directories to mount, space-separated |
 | `PETRA_HOME` | bootstrap | `./Petra`, or the checkout you run from |
 | `PETRA_REPO_URL`, `PETRA_REF` | bootstrap | `https://github.com/At1a8/Petra.git`, its default branch |
 | `CLAUDE_VERSION`, `CLAUDE_BIN_DIR` | bootstrap | `latest`, `~/.local/bin` |
+| `CLAUDE_CONFIG_DIR` | bootstrap, Claude Code | `/home/<you>/.petra/claude` for root in the container; when already set, used as it is |
 | `PETRA_FRAMEWORK_DIR`, `PETRA_FRAMEWORK_REPO` | bootstrap: `--framework-dir`, `--framework-repo` | none (step skipped); sglang |
 | `PETRA_SKIP_BOOTSTRAP` | bootstrap | unset; set it to install the package with no side effects (CI, images) |
 
@@ -212,7 +251,7 @@ step 3 the GEAK way (pip shows the output only with `-v`; a cached wheel skips i
 
 Petra is a GEAK-style workflow: `petra.js` holds the control flow, `roles/` the agent instructions,
 `knowledge/` the method, `templates/` the artifacts. In Claude Code, name `petra.js` and its arguments
-in one sentence, as in [step 4](#4-demo-prompt-inside-the-container). GEAK is needed in two cases
+in one sentence, as in [step 4](#4-start-claude-code-and-give-it-a-task-inside-the-container). GEAK is needed in two cases
 only: the `geak` kernel back end (`kernel_backend_dir`), and running `petra.js` outside Claude Code,
 which uses GEAK's workflow runtime (Node 20+; also what the dry run uses):
 
@@ -277,7 +316,8 @@ search API allows 10 requests a minute).
 checkout it lives in; every agent runs it after a git write ([`knowledge/env_hygiene.md`](knowledge/env_hygiene.md)).
 `scripts/check_framework_skills.py --framework-dir <dir>` checks the skills index against a framework
 checkout: skills it names that are gone, and new ones it does not name yet (the scout runs it on every
-scan).
+scan). `scripts/latest_image.py [--variant rocm10-mi30x]` prints the newest daily sglang image
+(`run_docker.sh` starts from it; the director compares a run's image with it).
 
 ## Tests
 
@@ -304,7 +344,7 @@ Petra/
 │   └── feature_skills/      # validated plans per feature (hisparse-v2 first)
 ├── templates/               # task_definition, feature_spec, design, experiment_ledger, validation_report,
 │                            # pr_body, issue_triage, ci_triage, perf_analysis, task_queue
-├── scripts/                 # task collection, audits, run_docker.sh, restore_owner.sh
+├── scripts/                 # task collection, audits, run_docker.sh, latest_image.py, restore_owner.sh
 ├── petra/bootstrap.py       # setup step 3, in the container; safe to re-run
 ├── setup.py, pyproject.toml # packaging; setup.py runs the bootstrap when pip builds the wheel
 ├── tests/                   # dry run of petra.js, unit tests of the scripts and the bootstrap

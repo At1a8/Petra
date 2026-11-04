@@ -288,6 +288,60 @@ class ShellRcTest(unittest.TestCase):
         self.assertEqual(out.strip(), "1 1 sk-test")
 
 
+class ClaudeStateTest(unittest.TestCase):
+    """Root's Claude Code state goes to ~/.petra/claude of the checkout's owner, so it outlives the container."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root_home = Path(tmp.name) / "root"
+        self.root_home.mkdir()
+        self.host = Path(tmp.name) / "u"
+        co = make_checkout(self.host / "Petra")
+        make_exe(self.host / ".local" / "bin" / "claude")
+        self.s = S("/", HOME=str(self.root_home), SHELL="/bin/bash", PETRA_HOME=str(co))
+        self.rc = self.root_home / ".bashrc"
+        self.state = self.host / ".petra" / "claude"
+
+    def test_state_dir_is_next_to_the_keys(self):
+        self.assertEqual(bs.claude_state_dir(self.s), str(self.state))
+        with mock.patch.object(bs, "keys_file", return_value=""), Quiet():
+            self.assertEqual(bs.claude_state_dir(self.s), "")
+            self.assertEqual(bs.ensure_claude_state(self.s, env={})[0], "skipped")
+        self.assertFalse(self.rc.exists())
+
+    @unittest.skipUnless(shutil.which("bash"), "needs bash")
+    def test_created_once_then_kept(self):
+        with mock.patch.object(bs, "give_back") as back, Quiet():
+            self.assertEqual(bs.ensure_claude_state(self.s, env={}), ("created", str(self.state)))
+            self.assertEqual(bs.ensure_claude_state(self.s, env={})[0], "kept")
+        self.assertEqual(back.call_args_list, [mock.call(str(self.state.parent))] * 2)
+        self.assertEqual(stat.S_IMODE(os.stat(self.state).st_mode), 0o700)
+        self.assertEqual(self.rc.read_text().count(bs.STATE_BEGIN), 1)
+        out = subprocess.run(["bash", "-c", 'source "$1"; echo "$CLAUDE_CONFIG_DIR"', "_", str(self.rc)],
+                             env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True).stdout
+        self.assertEqual(out.strip(), str(self.state))
+
+    def test_new_container_keeps_the_host_state(self):
+        self.state.mkdir(parents=True)
+        (self.state / ".claude.json").write_text('{"hasCompletedOnboarding": true}')
+        with mock.patch.object(bs, "give_back") as back, Quiet():
+            self.assertEqual(bs.ensure_claude_state(self.s, env={})[0], "added")
+        back.assert_called_once_with(str(self.state.parent))
+        self.assertEqual((self.state / ".claude.json").read_text(), '{"hasCompletedOnboarding": true}')
+
+    def test_a_config_dir_already_set_is_used_as_it_is(self):
+        with Quiet():
+            self.assertEqual(bs.ensure_claude_state(self.s, env={"CLAUDE_CONFIG_DIR": "/elsewhere"}), ("kept", "/elsewhere"))
+        self.assertFalse(self.rc.exists() or self.state.exists())
+
+    def test_a_login_kept_there_counts_as_api_access(self):
+        self.state.mkdir(parents=True)
+        self.assertFalse(bs.api_configured({"CLAUDE_CONFIG_DIR": str(self.state)}, str(self.root_home)))
+        (self.state / ".credentials.json").write_text("{}")
+        self.assertTrue(bs.api_configured({"CLAUDE_CONFIG_DIR": str(self.state)}, str(self.root_home)))
+
+
 class GitTrustTest(unittest.TestCase):
     def test_trust_added_once(self):
         s = S(tempfile.gettempdir())
@@ -371,11 +425,19 @@ class ReportTest(unittest.TestCase):
             self.assertIn("framework_dir=%s, gpu_ids=0\n" % (host / "sglang"), ready + "\n")
             self.assertNotIn("source", ready)
             self.assertNotIn("petra.js", bs.next_steps(s, {}, {"api": True}, path_env="/usr/bin", claude_only=True))
+            self.assertIn("in every new container", ready)
+            self.assertIn("Yes, I trust this folder", ready)
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": ""}), mock.patch.object(bs, "in_container", return_value=True):
+                kept = bs.next_steps(s, {"shell": "kept", "claude-state": "kept"}, {"api": True}, path_env="/usr/bin")
+                new_state = bs.next_steps(s, {"shell": "kept", "claude-state": "created"}, {"api": True}, path_env="/usr/bin")
+            self.assertIn("once (the answers are kept in %s)" % (host / ".petra" / "claude"), kept)
+            self.assertNotIn("source", kept)
+            self.assertIn("source", new_state)
 
 
 class MainTest(unittest.TestCase):
-    STEPS = ["ensure_checkout", "ensure_claude_link", "ensure_claude_code", "ensure_path", "ensure_git_trust",
-             "ensure_shell_env", "ensure_framework"]
+    STEPS = ["ensure_checkout", "ensure_claude_link", "ensure_claude_code", "ensure_path", "ensure_claude_state",
+             "ensure_git_trust", "ensure_shell_env", "ensure_framework"]
 
     def run_main(self, argv, container=False, root=False, failing=None):
         env = {k: v for k, v in os.environ.items() if not k.startswith("PETRA_")}
@@ -406,7 +468,7 @@ class MainTest(unittest.TestCase):
         rc, m = self.run_main([])
         self.assertEqual(self.called(m), ["ensure_checkout", "ensure_claude_code", "ensure_path", "ensure_framework"])
         rc, m = self.run_main(["--claude-only"], container=True, root=True)
-        self.assertEqual(self.called(m), ["ensure_claude_link", "ensure_claude_code", "ensure_path"])
+        self.assertEqual(self.called(m), ["ensure_claude_link", "ensure_claude_code", "ensure_path", "ensure_claude_state"])
         self.assertFalse(m["check_environment"].called)
         rc, m = self.run_main(["--check"])
         self.assertTrue(m["check_environment"].called and not self.called(m))

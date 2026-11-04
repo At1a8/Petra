@@ -309,6 +309,8 @@ function rolePrompt(role, sub, ins) {
     ? 'No RUN_DIR exists yet: change nothing; every check you run is read-only. Never push, never post on GitHub.'
     : `Write artifacts only under RUN_DIR (code changes only in the
 task worktree named in the inputs). Never push, never post on GitHub.
+Framework code runs from the worktree under test, never from the copy installed in the image: put it
+first on PYTHONPATH (sglang: <worktree>/python) for every server, test and benchmark.
 As root in the container, give back what you write into checkouts another user owns: after every git
 write and before you return, run ${PETRA}/scripts/restore_owner.sh on the framework's .git, the task
 worktree and RUN_DIR (knowledge/env_hygiene.md).`;

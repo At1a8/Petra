@@ -8,23 +8,26 @@ Every step checks first, keeps what is already there and installs or creates onl
 Nothing is deleted, overwritten or re-cloned: a step that could only proceed by changing existing
 state warns and leaves it alone.
 
-  checkout   clone Petra to $PETRA_HOME, unless run inside a checkout or one is already there
-  claude-in  (container) link the host's Claude Code onto PATH instead of installing another
-  claude     install the Claude Code CLI if it is still missing; update one older than petra.js needs
-  path       put the CLI's directory on PATH for new shells (one marked block in ~/.bashrc)
-  git        (root in a container) trust the mounted checkouts, which belong to another user
-  shell      (root in a container) no __pycache__ in the checkouts, no Claude Code self-update, and
-             the keys kept on the host in ~/.petra_env
-  framework  (--framework-dir) clone the framework, with its whole history, if the directory is missing
-  checks     git, docker (host only), ROCm, sglang, Node.js, API access, GitHub token (detect only)
+  checkout      clone Petra to $PETRA_HOME, unless run inside a checkout or one is already there
+  claude-in     (container) link the host's Claude Code onto PATH instead of installing another
+  claude        install the Claude Code CLI if it is still missing; update one older than petra.js needs
+  path          put the CLI's directory on PATH for new shells (one marked block in ~/.bashrc)
+  claude-state  (root in a container) keep Claude Code's state on the host, in ~/.petra/claude next to
+                the keys (CLAUDE_CONFIG_DIR): first-start answers and a /login outlive the container
+  git           (root in a container) trust the mounted checkouts, which belong to another user
+  shell         (root in a container) no __pycache__ in the checkouts, no Claude Code self-update, and
+                the keys kept on the host in ~/.petra_env
+  framework     (--framework-dir) clone the framework, with its whole history, if the directory is missing
+  checks        git, docker (host only), ROCm, sglang, Node.js, API access, GitHub token (detect only)
 
   python3 -B -m petra.bootstrap [--framework-dir DIR]
-  python3 -B -m petra.bootstrap --claude-only   # the claude and path steps
+  python3 -B -m petra.bootstrap --claude-only   # the claude-in, claude, path and claude-state steps
   python3 -B -m petra.bootstrap --check         # the checks
 
 Environment (a flag wins over its variable):
   PETRA_HOME, PETRA_REPO_URL, PETRA_REF       the checkout (default ./Petra, or the one you are in)
   CLAUDE_VERSION, CLAUDE_BIN_DIR              native-installer target (latest), its bin dir (~/.local/bin)
+  CLAUDE_CONFIG_DIR                           when set, used as it is instead of ~/.petra/claude
   PETRA_FRAMEWORK_DIR, PETRA_FRAMEWORK_REPO   --framework-dir, --framework-repo (default: sglang)
   PETRA_SKIP_BOOTSTRAP                        set to skip everything (CI, image builds)
 
@@ -49,6 +52,9 @@ RC_BEGIN = "# >>> petra: Claude Code CLI on PATH >>>"
 RC_END = "# <<< petra: Claude Code CLI on PATH <<<"
 ENV_BEGIN = "# >>> petra: root in the container >>>"
 ENV_END = "# <<< petra: root in the container <<<"
+STATE_DIR = os.path.join(".petra", "claude")
+STATE_BEGIN = "# >>> petra: Claude Code state on the host >>>"
+STATE_END = "# <<< petra: Claude Code state on the host <<<"
 # Root in the container must not leave root-owned __pycache__ in the host's checkouts, and must not
 # update the host's Claude Code install (the host updates it).
 CONTAINER_ENV = {"PYTHONDONTWRITEBYTECODE": "1", "DISABLE_AUTOUPDATER": "1"}
@@ -193,6 +199,13 @@ def keys_file(s: dict) -> str:
         return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(claude))), KEYS_FILE)
     dirs = owner_dirs(s)
     return os.path.join(dirs[-1], KEYS_FILE) if dirs else ""
+
+
+def claude_state_dir(s: dict) -> str:
+    """Where root in the container keeps Claude Code's state: ~/.petra/claude of the checkout's owner,
+    next to the keys. Separate from their own ~/.claude, which root would otherwise take over."""
+    keys = keys_file(s)
+    return os.path.join(os.path.dirname(keys), STATE_DIR) if keys else ""
 
 
 def _ver_tuple(s: str) -> tuple:
@@ -378,6 +391,35 @@ def ensure_shell_env(s: dict) -> tuple[str, str]:
     return "added", rc
 
 
+def ensure_claude_state(s: dict, env=None) -> tuple[str, str]:
+    """Root's home goes with the container, and with it every answer Claude Code asked for at its first
+    start (the API key, the folder trust, bypass permissions) and any /login. Keep them on the host."""
+    env = os.environ if env is None else env
+    if env.get("CLAUDE_CONFIG_DIR"):
+        log("claude-state: kept (CLAUDE_CONFIG_DIR=%s)" % env["CLAUDE_CONFIG_DIR"])
+        return "kept", env["CLAUDE_CONFIG_DIR"]
+    d = claude_state_dir(s)
+    if not d:
+        warn("claude-state: no home owned by the owner of %s; Claude Code's state stays in the container" % s["home"])
+        return "skipped", "no host home"
+    created = not os.path.isdir(d)
+    if created:
+        try:
+            os.makedirs(d, mode=0o700)
+        except OSError as e:
+            warn("claude-state: could not create %s (%s)" % (d, e))
+            return "failed", d
+    give_back(os.path.dirname(d))  # what Claude Code wrote there as root stays manageable from the host
+    rc = rc_file(s)
+    if STATE_BEGIN in _read(rc):
+        log("claude-state: kept (%s)" % rc)
+        return ("created" if created else "kept"), d
+    if not _append(rc, '\n%s\nexport CLAUDE_CONFIG_DIR="%s"\n%s\n' % (STATE_BEGIN, d, STATE_END)):
+        return "failed", rc
+    log("claude-state: Claude Code keeps its state in %s (CLAUDE_CONFIG_DIR, in %s)" % (d, rc))
+    return ("created" if created else "added"), d
+
+
 # --- git, as root in a container -------------------------------------------------
 
 def ensure_git_trust(s: dict) -> tuple[str, str]:
@@ -436,9 +478,10 @@ def ensure_framework(s: dict) -> tuple[str, str]:
 # --- checks (detect only) --------------------------------------------------------
 
 def api_configured(env, user_home: str) -> bool:
+    config_dir = env.get("CLAUDE_CONFIG_DIR") or os.path.join(user_home, ".claude")
     return bool(env.get("ANTHROPIC_API_KEY") or env.get("ANTHROPIC_AUTH_TOKEN")
                 or (env.get("ANTHROPIC_BASE_URL") and env.get("ANTHROPIC_CUSTOM_HEADERS"))
-                or os.path.isfile(os.path.join(user_home, ".claude", ".credentials.json")))
+                or os.path.isfile(os.path.join(config_dir, ".credentials.json")))
 
 
 def _importable(module: str) -> bool:
@@ -475,7 +518,7 @@ def check_environment(env=None) -> dict:
 # --- report ----------------------------------------------------------------------
 
 def summary(results: list) -> str:
-    rows = ["  %-10s %-10s %s" % r for r in results]
+    rows = ["  %-12s %-10s %s" % r for r in results]
     return "summary (safe to re-run: what is already there is kept):\n" + "\n".join(rows)
 
 
@@ -486,10 +529,13 @@ def next_steps(s: dict, statuses: dict, found: dict | None = None, path_env: str
     path_env = os.environ.get("PATH", "") if path_env is None else path_env
     steps = []
     d = s["claude_bin_dir"]
-    reload_rc = statuses.get("shell") == "added" or (
+    reload_rc = statuses.get("shell") == "added" or statuses.get("claude-state") in ("added", "created") or (
         os.path.isfile(os.path.join(d, "claude")) and not _on_path(d, path_env) and statuses.get("path") in ("added", "kept"))
     if reload_rc:
         steps.append(["Load the new settings into this shell (new shells have them):", hl("source %s" % rc_file(s))])
+    state = ""
+    if statuses.get("claude-state") in ("added", "created", "kept"):
+        state = os.environ.get("CLAUDE_CONFIG_DIR") or claude_state_dir(s)
     keys = keys_file(s) if in_container() else ""
     api = (found or {}).get("api")
     if api is None:
@@ -503,12 +549,20 @@ def next_steps(s: dict, statuses: dict, found: dict | None = None, path_env: str
             "b. a gateway or proxy:  " + hl("export ANTHROPIC_BASE_URL=https://your-gateway"),
             "                        " + hl("export ANTHROPIC_AUTH_TOKEN=your-token"),
             "   (a gateway that wants its own header: " + hl('export ANTHROPIC_CUSTOM_HEADERS="Header-Name: <key>"') + ")",
-            "c. interactive login:   " + hl("claude") + "   then /login" + ("  (lost with the container)" if keys else ""),
+            "c. interactive login:   " + hl("claude") + "   then /login"
+            + ("  (kept in %s)" % state if state else "  (lost with the container)" if keys else ""),
         ])
     if not claude_only:
         fw = s["framework_dir"] or "/path/to/sglang"
-        steps.append(["Start Claude Code from the checkout, permissions auto-approved (README step 4):",
-                      hl("cd %s && IS_SANDBOX=1 claude --dangerously-skip-permissions" % s["home"])])
+        start = ["Start Claude Code from the checkout, permissions auto-approved (README step 4):",
+                 hl("cd %s && IS_SANDBOX=1 claude --dangerously-skip-permissions" % s["home"])]
+        if in_container():
+            start += ["The first start asks a few questions %s; answer these, the defaults would stop you:"
+                      % ("once (the answers are kept in %s)" % state if state else "in every new container"),
+                      "  use the API key from your environment?  " + hl("Yes"),
+                      "  trust this folder?                      " + hl("Yes, I trust this folder"),
+                      "  Bypass Permissions mode                 " + hl("Yes, I accept")]
+        steps.append(start)
         elsewhere = "" if in_container() else ", container=<container>"
         steps.append(["Give it a task, e.g. collect and rank tasks, or take one issue:",
                       "use %s/petra.js with mode=scan, petra_dir=%s, framework_dir=%s" % (s["home"], s["home"], fw),
@@ -544,13 +598,18 @@ def main(argv=None) -> int:
     if container:
         steps.append(("claude-in", ensure_claude_link))
     steps += [("claude", ensure_claude_code), ("path", ensure_path)]
+    if container and is_root():
+        steps.append(("claude-state", ensure_claude_state))
     if not a.claude_only:
         if container and is_root():
             steps += [("git", ensure_git_trust), ("shell", ensure_shell_env)]
         steps.append(("framework", ensure_framework))
     results = [(name,) + step(s) for name, step in steps]
-    found = None if a.claude_only else check_environment()
     statuses = {step: status for step, status, _ in results}
+    state = {step: detail for step, _, detail in results}.get("claude-state")
+    if state and statuses.get("claude-state") in ("added", "created", "kept"):
+        os.environ.setdefault("CLAUDE_CONFIG_DIR", state)  # this run's checks see a login kept there
+    found = None if a.claude_only else check_environment()
     print("\n[petra-bootstrap] %s\n\n%s" % (summary(results), next_steps(s, statuses, found, claude_only=a.claude_only)),
           flush=True)
     return 1 if "failed" in statuses.values() else 0

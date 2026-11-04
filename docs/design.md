@@ -110,8 +110,12 @@ outside Claude Code, GEAK's workflow runtime is what executes `petra.js` (other 
 
 Petra runs inside the framework's ROCm container as root, as GEAK does, next to the GPUs and the
 framework's Python environment. Claude Code is installed once on the host and linked into the
-container; the checkouts stay on the host, and whatever a run writes into them as root goes back to
-their owner (`scripts/restore_owner.sh`), so host-side git and the human's push keep working.
+container, with root's Claude Code state kept on the host too; the checkouts stay on the host, and
+whatever a run writes into them as root goes back to their owner (`scripts/restore_owner.sh`), so
+host-side git and the human's push keep working. Tasks test the newest sglang: unless the user names an
+image or a container, the container runs the newest daily `rocm/sgl-dev` image for its ROCm and GPU
+(`scripts/latest_image.py`), and every server and test runs the task worktree's code, created from the
+current upstream main and put first on `PYTHONPATH`, never the copy of sglang installed in the image.
 
 - Gates G0–G5 (`validation_doctrine.md`), plus mode gates (`issue_repro`, `failing_test`) and the
   composability gates of every dimension a task touches.

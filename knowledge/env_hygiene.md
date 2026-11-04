@@ -31,6 +31,22 @@ Petra runs git inside the container, as root, on checkouts that belong to a host
   then `git worktree prune`.
 - Agents usually have no push credentials. Prepare the commit, then hand the user the exact `git push`.
 
+## The code under test
+
+- The image provides the runtime — PyTorch, aiter, sgl-kernel — and its own copy of the framework,
+  installed in editable mode from the image's checkout (`/sgl-workspace/sglang` in `rocm/sgl-dev`). A
+  plain `python -m sglang.launch_server` runs that copy, never the task's changes.
+- Run every server, test and benchmark from the worktree under test, first on `PYTHONPATH` (sglang:
+  `PYTHONPATH=<worktree>/python`), and check it once per launch script:
+  `python -c "import sglang; print(sglang.__file__)"` must print a path inside the worktree. Both arms
+  of an A/B run from the worktree: the baseline at the base commit or with the feature off, never the
+  image's copy.
+- Tasks test the newest sglang: the worktree starts from the current upstream main and, unless the user
+  named an image or a container, the image is the newest daily build for its ROCm and GPU
+  (`scripts/latest_image.py`, which `scripts/run_docker.sh` starts from; the `miles` images are for
+  reinforcement learning). Compiled packages too old for the worktree fail at import or startup: that is
+  an environment failure that names the newer image, not a framework bug to fix.
+
 ## Servers
 
 - One launch script with a mode switch and a tag; one log per launch named `<tag>_<timestamp>` with the

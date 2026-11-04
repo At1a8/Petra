@@ -15,6 +15,7 @@ sys.path.insert(0, str(SCRIPTS))
 import audit_host_syncs  # noqa: E402
 import audit_platform_gates  # noqa: E402
 import check_framework_skills  # noqa: E402
+import latest_image  # noqa: E402
 import scan_ci  # noqa: E402
 import scan_issues  # noqa: E402
 import scan_upstream  # noqa: E402
@@ -44,6 +45,32 @@ class CheckFrameworkSkillsTest(unittest.TestCase):
             self.assertEqual(r["missing"], ["gone-skill"])
             self.assertEqual(r["unindexed"], ["new-skill", "sglang-diffusion-add-model"])
             self.assertEqual(r["present"], 5)
+
+
+class LatestImageTest(unittest.TestCase):
+    TAGS = [  # as Docker Hub lists them, newest push first
+        {"name": "v0.5.23-rocm720-mi30x-20261104", "last_updated": "2026-11-04T12:40:00Z"},
+        {"name": "miles-rocm10-mi35x", "last_updated": "2026-11-04T11:31:00Z"},
+        {"name": "miles-rocm10-mi35x-20261104", "last_updated": "2026-11-04T11:30:58Z"},
+        {"name": "v0.5.23-rocm10-mi35x-20261103", "last_updated": "2026-11-03T12:00:52Z"},
+        {"name": "v0.5.23-rocm10-mi30x-20261103", "last_updated": "2026-11-03T11:44:58Z"},
+        {"name": "v0.5.22-rocm10-mi35x-20261021", "last_updated": "2026-11-03T09:00:00Z"},  # re-pushed
+        {"name": "v0.5.22.post1-rocm10-mi35x-20261103", "last_updated": "2026-11-03T08:00:00Z"},
+        {"name": "v0.5.23-rocm10-mi35x-20261103-debug", "last_updated": "2026-11-03T13:00:00Z"},
+    ]
+
+    def test_newest_daily_build_of_the_variant(self):
+        self.assertEqual(latest_image.pick(self.TAGS, "rocm10-mi35x"), "v0.5.23-rocm10-mi35x-20261103")
+        self.assertEqual(latest_image.pick(self.TAGS, "rocm10-mi30x"), "v0.5.23-rocm10-mi30x-20261103")
+        self.assertEqual(latest_image.pick(self.TAGS, "rocm720-mi30x"), "v0.5.23-rocm720-mi30x-20261104")
+
+    def test_miles_and_other_tags_never_count(self):
+        miles = [t for t in self.TAGS if t["name"].startswith("miles")]
+        self.assertEqual(latest_image.pick(miles, "rocm10-mi35x"), "")
+        self.assertIsNone(latest_image.daily_key("v0.5.23-rocm10-mi35x-20261103-debug", "rocm10-mi35x"))
+        self.assertIsNone(latest_image.daily_key("v0.5.23-rocm10-mi35xx-20261103", "rocm10-mi35x"))
+        self.assertEqual(latest_image.daily_key("v0.5.22.post1-rocm10-mi35x-20261103", "rocm10-mi35x"),
+                         ("20261103", (0, 5, 22)))
 
 
 class ScanCiTest(unittest.TestCase):

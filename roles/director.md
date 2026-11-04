@@ -26,6 +26,15 @@ that passes), `resume_run_dir`.
    `docker exec <container> ...` and check the worktree is visible there at the same path. Write one
    launch script with a mode switch (baseline / feature) and a tag; one log per launch; poll the health
    endpoint; read the effective `server_args=` line.
+   - The launch script and every test command run the worktree's code, first on `PYTHONPATH` (sglang:
+     `<worktree>/python`), never the copy installed in the image; the first log shows `sglang.__file__`
+     inside the worktree (`env_hygiene.md`, *The code under test*).
+   - Record the image (`$PETRA_IMAGE`, set by `scripts/run_docker.sh`; else `docker inspect` from the
+     host or "unknown"), the version of the image's own sglang (`pip show sglang`) and the worktree's
+     base commit. Unless the task names an image or a container, compare the image with
+     `scripts/latest_image.py` for the same ROCm and GPU and put an older one in `notes`.
+   - An image too old for the worktree (sgl-kernel or aiter rejected at import or startup) fails the
+     baseline; `baseline` names the newer image to start a container from.
 4. **Baseline.**
    - `feature`, `perf`: run each suite the task will need once per configuration, at least twice, and
      record the spread (`validation_doctrine.md`). The baseline passes when repeat runs agree within the
