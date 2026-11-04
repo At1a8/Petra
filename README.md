@@ -13,16 +13,19 @@ Why it exists and how it maps onto the agreed design: [`docs/design.md`](docs/de
 
 | Mode | Task | Phases | Ends with |
 |---|---|---|---|
-| `feature` | an upstream PR or design to bring to AMD | Setup → Spec → Recon → Design → Implement → Kernel → Verify → Performance → PR → Report | branch + PR body + validation report |
-| `issue` | an AMD user issue | Setup → Triage → Reproduce → Diagnose (skipped for an existing fix PR) → Implement → Verify → PR → Report | fix PR, or a triage conclusion; always a reply draft |
-| `ci` | a red AMD CI job or Failure Tracker cluster | Setup → Classify → Bisect → Implement → Verify → PR → Report | fix PR, or a handover for flaky/infrastructure failures |
-| `perf` | a system-level performance goal for a model and workload | Setup → Profile → Plan → Implement → Kernel → Verify → Performance → PR → Report | PR with a measured win, or the change dropped; kernel-level items go to the kernel back end |
-| `scan` | none — collect tasks from every source | Collect → Dispatch → Report | a ranked task queue with the arguments to start each task |
+| `feature` | an upstream PR or design to bring to AMD | Setup → Spec → Recon → Design → Implement → (Kernel) → Verify → Performance → PR → Report | branch + PR body + validation report |
+| `issue` | an AMD user issue | Setup → Triage → Reproduce → Diagnose (skipped for an existing fix PR) → Implement → (Kernel) → Verify → (Performance) → PR → Report | fix PR, or a conclusion (triaged, not reproduced, fixed on main, diagnosed); always a reply draft |
+| `ci` | a red AMD CI job or Failure Tracker cluster | Setup → Classify → Bisect → Implement → (Kernel) → Verify → PR → Report | fix PR, or a handover for flaky/infrastructure failures |
+| `perf` | a system-level performance goal for a model and workload | Setup → Profile → Plan → Implement → (Kernel) → Verify → Performance → PR → Report | PR with a measured win, or the change dropped; kernel-level items go to the kernel back end |
+| `scan` | none — collect tasks from upstream commits, AMD issues, CI failures and platform gates (host-sync leads on request) | Collect → Dispatch → Report | a ranked task queue with the arguments to start each task |
+
+Phases in parentheses run only when they apply: Kernel when there is a kernel hand-off and
+`kernel_backend` is not `none`; Performance in issue mode for issues triaged as `performance`.
 
 Every implementation runs one work package at a time; an independent test engineer re-runs its unit
 test and the feature-off check, and a package that keeps failing is rolled back. Verification failures
-go to an investigator that runs the controls before any instrumentation and returns either a fix or a
-proof that the failure is pre-existing on the baseline.
+go to an investigator that runs the controls before any instrumentation and returns a fix, a proof
+that the failure is pre-existing on the baseline, or an inconclusive verdict that stops the task.
 
 Kernel-level work — tuning a kernel Petra wrote for a feature, or a kernel-level performance
 opportunity — is handed to a **kernel workflow back end** in the Kernel phase between Implement and
@@ -36,6 +39,36 @@ Verify ([`knowledge/kernel_backends.md`](knowledge/kernel_backends.md)):
 
 A gain comes back as a work package: the implementer integrates it and Petra's own gates judge it. A
 back end that fails or finds nothing never blocks the task.
+
+## Roles
+
+Each phase calls a role: an agent that reads `roles/<role>.md`, does its part and returns structured
+JSON; `petra.js` holds the schemas and branches only on their required fields. Four rules hold across
+the roles:
+
+- only the **implementer** edits framework source, and only in the task's worktree;
+- the roles that measure (test engineer, verify engineer, performance engineer) never edit framework
+  source and never reuse anyone else's numbers: they run everything again themselves;
+- the **curator** edits only Petra's own `knowledge/` and leaves the edits uncommitted for review;
+- no role pushes or posts: the PR engineer returns the exact `git push`, issue replies are drafts.
+
+| Role | Phases | What it does |
+|---|---|---|
+| `director` | Setup, Spec, Report | creates the run directory, task branch and worktree, pins commit, image and GPUs and runs the baseline; writes the feature spec with measurable acceptance criteria; writes the final report for every outcome, with the next step for a human |
+| `scout` | Collect | gathers candidate tasks with the scripts below |
+| `dispatcher` | Dispatch | sets each candidate's gap type, level, CUDA dependencies with their AMD starting points, effort and priority, and ranks them into a queue |
+| `analyst` | Recon | maps every subsystem a feature needs to a file, function and hook in the target framework, and tables which assumptions of the source design hold on AMD; reads only |
+| `architect` | Design, Plan | turns the recon or the profile into work packages that can each be tested alone, with invariants, memory budget, synchronization, startup rejections and a test plan; flags designs a human must review; assigns each performance opportunity to Petra, the kernel back end or Hyperloom |
+| `issue_triager` | Triage, Reproduce | sets the priority and the action from the issue, its comments and linked PRs; drafts the reply; writes the reproduction that becomes the issue's gate |
+| `ci_guardian` | Classify, Bisect | classifies a red job (code regression, dependency bump, test bug, flaky, infrastructure) and hands the last two over; finds and confirms the culprit commit and plans the fix |
+| `implementer` | Implement | one work package at a time, smallest diff, neutral with the feature off, HIP-only or behind a switch; functional kernels with unit tests (tuning is a hand-off); applies existing PRs and verified kernel gains; rolls back a failed package |
+| `test_engineer` | Implement | re-runs each package's unit test on its commit and checks that behaviour with the feature off is unchanged |
+| `verify_engineer` | Verify | runs the correctness gates (G0, G2–G4, composability, the mode's gate) on fresh servers against a same-pattern baseline, classifying and counting every failure |
+| `investigator` | Investigate, Diagnose | runs the controls first, then one-mechanism-at-a-time experiments with a hypothesis ledger; returns fix work packages, a known issue the baseline shares, an inconclusive verdict, or (for an issue) a root cause outside the AMD side; probes only behind switches |
+| `perf_engineer` | Profile, Performance | turns a steady-state trace into metrics and opportunities with upper bounds; evaluates changes at equal budget against noise and guard workloads |
+| `kernel_liaison` | Kernel | turns a kernel hand-off into the back end's task, runs `command` back ends, judges the result on the back end's own verification and returns a gain as a work package |
+| `pr_engineer` | PR | hygiene, lint, CI registration, one commit per work package, a trial merge of main, feature off on the final commit, the PR body and the push command |
+| `curator` | Report | writes what the run proved into `knowledge/` (known issues, feature skills, CUDA → AMD rows, method lessons), every number traceable to the run |
 
 ## Setup
 
