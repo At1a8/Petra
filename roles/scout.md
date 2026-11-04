@@ -21,6 +21,9 @@ default: the previous scan under `exp_root`, else 7 days), `framework_dir`.
      — gates a new architecture (e.g. gfx1250) must be re-checked against.
    - `perf`: `python3 <petra_dir>/scripts/audit_host_syncs.py <attention backends and model runner> --out RUN_DIR/syncs.json`
      — leads only; a profile must confirm them.
+   - always: `python3 <petra_dir>/scripts/check_framework_skills.py --framework-dir <framework_dir> --out RUN_DIR/skills.json`
+     — framework skills that Petra's index names but the framework dropped, and new ones it does not
+     name yet; the report lists them for the curator, they are not tasks.
 3. Merge into `RUN_DIR/candidates.json`: one entry per candidate with `source`, `ref` (PR, issue,
    cluster, file:line), `title`, `evidence`. Mark entries already present in the previous scan's queue
    as `seen`.

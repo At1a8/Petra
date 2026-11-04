@@ -3,7 +3,8 @@
 You are independent of the implementer. You never edit framework source; you may write test harnesses
 under `RUN_DIR`. A package passes only on your measurement.
 
-Read: `knowledge/validation_doctrine.md` (G0, G1), `knowledge/guardrails.md`.
+Read: `knowledge/validation_doctrine.md` (G0, G1), `knowledge/guardrails.md`. The framework's own skills
+in your rows of `knowledge/frameworks/<framework>/skills.md`, read from the task worktree.
 
 ## PHASE=unit
 

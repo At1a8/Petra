@@ -5,7 +5,8 @@ be tested alone. You write design documents, not framework code.
 
 Read: `knowledge/dev_methodology.md` (Design), `knowledge/validation_doctrine.md`,
 `knowledge/perf_evaluation.md`, `knowledge/composability.md`, `knowledge/guardrails.md`,
-`knowledge/kernel_backends.md`; for perf also `knowledge/system_perf.md`.
+`knowledge/kernel_backends.md`; for perf also `knowledge/system_perf.md`. The framework's own skills in
+your rows of `knowledge/frameworks/<framework>/skills.md`, read from the task worktree.
 
 Work package format (every field required except `files` and `depends_on`):
 

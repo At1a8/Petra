@@ -48,10 +48,11 @@ const DEFAULTS = {
   'verify_engineer:verify': () => ({ all_pass: true, gates: { G0: 'pass', G2: 'pass' }, failures: [], ledger_path: `${RUN}/experiment_ledger.md` }),
   'investigator:investigate': () => ({ verdict: 'fix_needed', work_packages: [WP('FIX1')], summary: 'race in hook' }),
   'investigator:diagnose': () => ({ verdict: 'fix_needed', root_cause: 'stale import', work_packages: [WP('WP1')] }),
-  'perf_engineer:perf_eval': () => ({ claim_reproduced: true, guards_ok: true, results: [], summary: '+22%' }),
-  'perf_engineer:profile': () => ({ analysis_path: `${RUN}/perf_analysis.md`, metrics: { gpu_busy: 0.71 }, opportunities: [
+  'perf_engineer:perf_eval': () => ({ claim_reproduced: true, guards_ok: true, workload_unchanged: true, path_ok: true, results: [], summary: '+22%' }),
+  'perf_engineer:profile': () => ({ analysis_path: `${RUN}/perf_analysis.md`, path_ok: true, path_evidence: 'aiter attention, graphs on', metrics: { gpu_busy: 0.71 }, opportunities: [
     { id: 'O1', kind: 'host_sync', where: 'aiter_backend.py', evidence: 'trace', upper_bound_pct: 4, owner: 'petra' },
     { id: 'O2', kind: 'kernel', where: 'moe', evidence: 'trace', upper_bound_pct: 9, owner: 'kernel_workflow' }] }),
+  'reviewer:review': () => ({ verdict: 'approve', findings: [{ severity: 'minor', where: 'x.py:1', issue: 'a name' }], review_path: `${RUN}/review.md`, summary: 'one minor' }),
   'pr_engineer:pr': () => ({ branch: 'petra/task', title: '[Fix] [AMD] scope: thing', commits: ['c_WP1'], lint_pass: true, feature_off_final: true, upstream_synced: true, pr_body_path: `${RUN}/pr_body.md`, push_command: 'git push origin petra/task' }),
   'curator:learn': () => ({ updates: [{ file: 'knowledge/known_issues.md', change: 'none' }], skill_status: 'draft' }),
   'issue_triager:triage': () => ({ priority: 'P0', category: 'crash', action: 'reproduce', reason: 'default config crash', existing_prs: [], triage_path: `${RUN}/issue_triage.md`, reply_draft_path: `${RUN}/reply.md` }),
@@ -93,13 +94,13 @@ function makeBackend(overrides) {
   const calls = [];
   const counts = {};
   const b = { name: 'fake' };
-  b.runAgent = async ({ prompt }) => {
+  b.runAgent = async ({ prompt, model }) => {
     const m = ROLE_RE.exec(prompt);
     if (!m) throw new Error('prompt without role header');
     const key = `${m[1]}:${m[2]}`;
     const n = (counts[key] = (counts[key] || 0) + 1);
     const ins = parseInputs(prompt);
-    calls.push({ key, n, ins });
+    calls.push({ key, n, ins, model });
     const f = (overrides && overrides[key]) || DEFAULTS[key];
     if (!f) throw new Error(`no scripted answer for ${key}`);
     const ans = f(ins, n);
@@ -120,7 +121,8 @@ async function run(args, overrides) {
       if (m) phases.push(m[1]);
     },
   });
-  const result = await rt.runScript(SCRIPT, { petra_dir: PETRA, framework_dir: '/tmp/sglang', agent_retries: 1, ...args }, 0);
+  const perfDefaults = args.mode === 'perf' ? { workload: '{"isl":8192,"osl":1024,"conc":64}' } : {};
+  const result = await rt.runScript(SCRIPT, { petra_dir: PETRA, framework_dir: '/tmp/sglang', agent_retries: 1, ...perfDefaults, ...args }, 0);
   return { result, phases, calls, keys: calls.map((c) => c.key) };
 }
 
@@ -136,7 +138,7 @@ const scenarios = [
   ['feature: straight path to a reviewable PR', async () => {
     const r = await run({ mode: 'feature', task: 'port HiSparse V2 to DeepSeek-V4.1' });
     check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
-    check(eqList(r.phases, ['Setup', 'Spec', 'Recon', 'Design', 'Implement', 'Verify', 'Performance', 'PR', 'Report']), `phases ${r.phases}`);
+    check(eqList(r.phases, ['Setup', 'Spec', 'Recon', 'Design', 'Implement', 'Verify', 'Performance', 'Review', 'PR', 'Report']), `phases ${r.phases}`);
     check(r.result.done.map((d) => d.wp).join() === 'WP1,WP2', `done ${JSON.stringify(r.result.done)}`);
     check(r.result.pr && r.result.pr.push_command === 'git push origin petra/task', 'push command surfaced, not executed');
     check(r.keys.filter((k) => k === 'curator:learn').length === 1, 'curator runs once');
@@ -248,7 +250,7 @@ const scenarios = [
   ['issue: reproduce, diagnose, fix, verify with the reproduction as a gate', async () => {
     const r = await run({ mode: 'issue', task: 'https://github.com/sgl-project/sglang/issues/38849' });
     check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
-    check(eqList(r.phases, ['Setup', 'Triage', 'Reproduce', 'Diagnose', 'Implement', 'Verify', 'PR', 'Report']), `phases ${r.phases}`);
+    check(eqList(r.phases, ['Setup', 'Triage', 'Reproduce', 'Diagnose', 'Implement', 'Verify', 'Review', 'PR', 'Report']), `phases ${r.phases}`);
     const v = r.calls.find((c) => c.key === 'verify_engineer:verify');
     check(v && JSON.stringify(v.ins.extra_gates).includes('issue_repro'), 'issue_repro gate passed to verify');
     check(r.result.priority === 'P0', 'priority recorded');
@@ -271,7 +273,7 @@ const scenarios = [
       'issue_triager:triage': () => ({ priority: 'P1', category: 'crash', action: 'push_existing_pr', existing_prs: ['#40872'], triage_path: `${RUN}/t.md` }),
     });
     check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
-    check(eqList(r.phases, ['Setup', 'Triage', 'Reproduce', 'Implement', 'Verify', 'PR', 'Report']), `phases ${r.phases}`);
+    check(eqList(r.phases, ['Setup', 'Triage', 'Reproduce', 'Implement', 'Verify', 'Review', 'PR', 'Report']), `phases ${r.phases}`);
     const im = r.calls.find((c) => c.key === 'implementer:implement');
     check(im && im.ins.work_package.kind === 'apply_pr' && im.ins.work_package.goal.includes('#40872'), 'apply_pr work package');
     const v = r.calls.find((c) => c.key === 'verify_engineer:verify');
@@ -304,7 +306,7 @@ const scenarios = [
   ['ci: code regression to a fix PR', async () => {
     const r = await run({ mode: 'ci', task: 'tracker cluster _check ImportError' });
     check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
-    check(eqList(r.phases, ['Setup', 'Classify', 'Bisect', 'Implement', 'Verify', 'PR', 'Report']), `phases ${r.phases}`);
+    check(eqList(r.phases, ['Setup', 'Classify', 'Bisect', 'Implement', 'Verify', 'Review', 'PR', 'Report']), `phases ${r.phases}`);
     const v = r.calls.find((c) => c.key === 'verify_engineer:verify');
     check(v && JSON.stringify(v.ins.extra_gates).includes('failing_test'), 'failing_test gate passed to verify');
   }],
@@ -329,7 +331,7 @@ const scenarios = [
   }],
   ['perf: no measured win drops the change', async () => {
     const r = await run({ mode: 'perf', task: 'DeepSeek-V4.1 decode on MI355X' }, {
-      'perf_engineer:perf_eval': () => ({ claim_reproduced: false, guards_ok: true, summary: '-0.3% within noise' }),
+      'perf_engineer:perf_eval': () => ({ claim_reproduced: false, guards_ok: true, workload_unchanged: true, path_ok: true, summary: '-0.3% within noise' }),
     });
     check(r.result.status === 'dropped' && r.result.stopped_at === 'Performance', `status ${r.result.status}`);
     check(r.keys.includes('implementer:rollback'), 'change rolled back');
@@ -338,7 +340,7 @@ const scenarios = [
   ['perf: measured win to a PR', async () => {
     const r = await run({ mode: 'perf', task: 'p', apply_prs: ['#46329'] });
     check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
-    check(eqList(r.phases, ['Setup', 'Profile', 'Plan', 'Implement', 'Verify', 'Performance', 'PR', 'Report']), `phases ${r.phases}`);
+    check(eqList(r.phases, ['Setup', 'Profile', 'Plan', 'Implement', 'Verify', 'Performance', 'Review', 'PR', 'Report']), `phases ${r.phases}`);
     const p = r.calls.find((c) => c.key === 'architect:perf_plan');
     check(p && eqList(p.ins.apply_prs, ['#46329']), 'apply_prs reach the planner');
   }],
@@ -394,7 +396,7 @@ const scenarios = [
       { id: 'O3', owner: 'hyperloom' }], perf_claim: '-6% TPOT', gate_ok: true }) };
     const r = await run({ mode: 'perf', task: 'p', kernel_backend: 'geak', kernel_backend_dir: FAKE_GEAK }, plan);
     check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
-    check(eqList(r.phases, ['Setup', 'Profile', 'Plan', 'Kernel', 'Implement', 'Verify', 'Performance', 'PR', 'Report']), `phases ${r.phases}`);
+    check(eqList(r.phases, ['Setup', 'Profile', 'Plan', 'Kernel', 'Implement', 'Verify', 'Performance', 'Review', 'PR', 'Report']), `phases ${r.phases}`);
     const byId = Object.fromEntries(r.result.handoffs.map((h) => [h.id, h.status]));
     check(byId.O2 === 'integrated' && byId.O3 === 'recorded', `statuses ${JSON.stringify(byId)}`);
     const none = await run({ mode: 'perf', task: 'p', kernel_backend: 'geak', kernel_backend_dir: FAKE_GEAK },
@@ -412,6 +414,64 @@ const scenarios = [
     try { await run({ mode: 'feature', task: 't', kernel_backend: 'command' }); } catch (e) { msg = e.message; }
     check(msg.includes('needs args.kernel_backend_command'), `command without command: ${msg}`);
   }],
+  ['review: requested changes are implemented, verified, measured and reviewed again', async () => {
+    const r = await run({ mode: 'feature', task: 't' }, {
+      'reviewer:review': (ins, n) => (n === 1
+        ? { verdict: 'changes_requested', findings: [{ severity: 'major', where: 'x.py:9', issue: 'breaks TP=8 with DP attention' }],
+          work_packages: [WP('R1')], review_path: `${RUN}/review.md` }
+        : { verdict: 'approve', findings: [], review_path: `${RUN}/review.md` }),
+    });
+    check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
+    check(eqList(r.phases.slice(6), ['Performance', 'Review', 'Implement', 'Verify', 'Performance', 'Review', 'PR', 'Report']), `phases ${r.phases}`);
+    check(r.result.done.map((d) => d.wp).includes('R1'), 'the review fix passed the test engineer');
+    const second = r.calls.filter((c) => c.key === 'reviewer:review')[1];
+    check(second && second.ins.round === 1, 'the second review knows its round');
+  }],
+  ['review: a blocked review, or an approval with a blocker, stops before the PR', async () => {
+    const blocked = await run({ mode: 'ci', task: 'c' }, {
+      'reviewer:review': () => ({ verdict: 'blocked', findings: [{ severity: 'blocker', issue: 'changes a shared CUDA path' }], review_path: `${RUN}/review.md` }),
+    });
+    check(blocked.result.status === 'blocked' && blocked.result.stopped_at === 'Review', `blocked: ${blocked.result.status} at ${blocked.result.stopped_at}`);
+    check(!blocked.keys.includes('pr_engineer:pr'), 'no PR after a blocked review');
+    const odd = await run({ mode: 'ci', task: 'c' }, {
+      'reviewer:review': () => ({ verdict: 'approve', findings: [{ severity: 'blocker', issue: 'x' }], review_path: `${RUN}/review.md` }),
+    });
+    check(odd.result.status === 'blocked' && odd.result.stopped_at === 'Review', 'an approval with a blocker is not an approval');
+  }],
+  ['review: the review rounds are bounded', async () => {
+    const r = await run({ mode: 'ci', task: 'c', max_review_rounds: 1 }, {
+      'reviewer:review': (ins, n) => ({ verdict: 'changes_requested', findings: [{ severity: 'major', issue: 'again' }],
+        work_packages: [WP(`R${n}`)], review_path: `${RUN}/review.md` }),
+    });
+    check(r.result.status === 'blocked' && r.result.stopped_at === 'Review', `status ${r.result.status}`);
+    check(r.keys.filter((k) => k === 'reviewer:review').length === 2, 'max_review_rounds + 1 reviews');
+  }],
+  ['review: review_model reaches the reviewer only', async () => {
+    const r = await run({ mode: 'ci', task: 'c', review_model: 'another-model' });
+    const reviews = r.calls.filter((c) => c.key === 'reviewer:review');
+    check(reviews.length === 1 && reviews.every((c) => c.model === 'another-model'), `reviewer model: ${reviews.map((c) => c.model)}`);
+    check(r.calls.filter((c) => c.key !== 'reviewer:review').every((c) => !c.model), 'the other roles keep the session model');
+  }],
+  ['perf: a workload is required', async () => {
+    let msg = '';
+    try { await run({ mode: 'perf', task: 'p', workload: '' }); } catch (e) { msg = e.message; }
+    check(msg.includes('args.workload is required for mode=perf'), `no workload: ${msg}`);
+  }],
+  ['perf: a profile of the wrong path stops before any plan', async () => {
+    const r = await run({ mode: 'perf', task: 'p' }, {
+      'perf_engineer:profile': () => ({ analysis_path: `${RUN}/perf_analysis.md`, path_ok: false,
+        path_evidence: 'intended aiter attention, the log shows the triton fallback', opportunities: [] }),
+    });
+    check(r.result.status === 'blocked' && r.result.stopped_at === 'Profile', `status ${r.result.status}`);
+    check(!r.keys.includes('architect:perf_plan'), 'no plan from an untrusted profile');
+  }],
+  ['perf: a measurement off the fixed workload is not evidence and drops nothing', async () => {
+    const r = await run({ mode: 'perf', task: 'p' }, {
+      'perf_engineer:perf_eval': () => ({ claim_reproduced: false, guards_ok: true, workload_unchanged: false, path_ok: true, summary: 'c64 dropped' }),
+    });
+    check(r.result.status === 'blocked' && r.result.stopped_at === 'Performance', `status ${r.result.status}`);
+    check(!r.keys.includes('implementer:rollback'), 'an untrusted measurement rolls nothing back');
+  }],
   ['roles: every role and PHASE petra.js calls is documented', async () => {
     const src = readFileSync(SCRIPT, 'utf8');
     const sites = [...src.matchAll(/call\('([a-z_]+)', '([a-z_]+)'/g)].map((m) => [m[1], m[2]]);
@@ -421,6 +481,15 @@ const scenarios = [
       const doc = existsSync(f) ? readFileSync(f, 'utf8') : '';
       check(doc.includes(`## PHASE=${ph}`), `roles/${role}.md documents PHASE=${ph}`);
       check(DEFAULTS[`${role}:${ph}`] !== undefined, `dry run scripts an answer for ${role}:${ph}`);
+    }
+  }],
+  ['skills: every role in the framework-skills index reads it', async () => {
+    const index = readFileSync(path.join(PETRA, 'knowledge', 'frameworks', 'sglang', 'skills.md'), 'utf8');
+    const roles = [...new Set([...index.matchAll(/^\| ([a-z_]+) \| [a-z_, ]+ \|/gm)].map((m) => m[1]))].filter((r) => r !== 'role');
+    check(roles.length >= 10, `index rows for ${roles.length} roles`);
+    for (const role of roles) {
+      const f = path.join(PETRA, 'roles', `${role}.md`);
+      check(existsSync(f) && readFileSync(f, 'utf8').includes('frameworks/<framework>/skills.md'), `roles/${role}.md points to the index`);
     }
   }],
   ['schemas: a malformed answer is rejected and the run stops cleanly', async () => {

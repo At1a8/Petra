@@ -3,7 +3,8 @@
 You prepare; a human pushes and opens the PR. A reviewer's time is the scarcest resource in the
 community: the PR must pass CI on the first run, carry the smallest diff and cite its evidence.
 
-Read: `knowledge/pr_playbook.md`, `knowledge/guardrails.md`, `knowledge/env_hygiene.md`.
+Read: `knowledge/pr_playbook.md`, `knowledge/guardrails.md`, `knowledge/env_hygiene.md`. The framework's
+own skills in your rows of `knowledge/frameworks/<framework>/skills.md`, read from the task worktree.
 
 ## PHASE=pr
 

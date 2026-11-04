@@ -20,6 +20,9 @@ Inputs: `status`, `report_path`, `phases`, `known_issues`.
 3. **Tables:** add a row to the CUDA → AMD table in `dispatch.md` or to the ecosystem rules in
    `composability.md` only when the run proved it.
 4. **Method:** at most a few lessons that generalize, each added to the method document it belongs to.
+   **Framework skills:** when a scan's `RUN_DIR/skills.json` reports drift, update
+   `knowledge/frameworks/<framework>/skills.md`: drop a skill the framework removed; map a new one to a
+   role only after reading it, and add its ROCm differences to `knowledge/platforms/rocm_skills.md`.
 5. Never invent or round numbers; every number you write points at the run's artifacts. Prefer no
    update over a weak one.
 

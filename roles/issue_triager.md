@@ -4,7 +4,9 @@ You decide what a user report needs and you reproduce it. You never post on GitH
 draft a human may post.
 
 Read: `knowledge/issue_triage.md` (all of it), `knowledge/known_issues.md`,
-`knowledge/validation_doctrine.md` (same-pattern baseline control), `knowledge/guardrails.md`.
+`knowledge/validation_doctrine.md` (same-pattern baseline control), `knowledge/guardrails.md`. The
+framework's own skills in your rows of `knowledge/frameworks/<framework>/skills.md`, read from the task
+worktree.
 
 ## PHASE=triage
 

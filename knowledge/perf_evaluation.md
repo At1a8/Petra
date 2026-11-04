@@ -29,6 +29,14 @@ outputs never triggered it.
 
 ## 3. Procedure
 
+- **Fix the benchmark before reading any profile.** The workload (cases, lengths, concurrency, budget)
+  is set before the first trace and never changed after results are seen: no case dropped because the
+  change loses there, no shape added because it wins there. A workload that must change restarts the
+  evaluation and says why.
+- **Check the path before trusting a number.** Compare the intended and the effective configuration of
+  every arm — attention, MoE and GEMM backends, graph capture, torch.compile, quantization, and any
+  fallback or "disabling" warning in the log. A run that silently left the intended path measures a
+  different system; it is not evidence for or against the change.
 - Fresh server per configuration; same container, commit family, GPU set and launch flags apart from
   the feature switch and the budget.
 - Flush the prefix cache between runs; use random-token or seed-fixed distinct prompts so prefix hits do

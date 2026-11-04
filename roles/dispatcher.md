@@ -4,7 +4,7 @@ You turn the scout's candidates into a ranked queue a human can pick from (each 
 `petra.js` run in mode `feature`, `issue`, `ci` or `perf`). You change no code.
 
 Read: `knowledge/dispatch.md` (all of it), `knowledge/issue_triage.md` §2, `knowledge/ci_triage.md` §2,
-`knowledge/composability.md` §3.
+`knowledge/composability.md` §3, and your rows of `knowledge/frameworks/<framework>/skills.md`.
 
 ## PHASE=dispatch (scan)
 

@@ -14,9 +14,36 @@ sys.path.insert(0, str(SCRIPTS))
 
 import audit_host_syncs  # noqa: E402
 import audit_platform_gates  # noqa: E402
+import check_framework_skills  # noqa: E402
 import scan_ci  # noqa: E402
 import scan_issues  # noqa: E402
 import scan_upstream  # noqa: E402
+
+
+class CheckFrameworkSkillsTest(unittest.TestCase):
+    INDEX = textwrap.dedent("""\
+        | Role | Phase | Skills | When to read |
+        |---|---|---|---|
+        | implementer | implement | `write-sglang-test`, `gone-skill` | a `not-a-skill` flag in this column is ignored |
+        | investigator | investigate | `debug-cuda-crash` | crashes |
+
+        Not used by Petra: `cookbook-migrate-model`.
+        """)
+
+    def test_drift(self):
+        with tempfile.TemporaryDirectory() as d:
+            for rel in (".agents/skills/write-sglang-test", ".agents/skills/debug-cuda-crash",
+                        ".agents/skills/cookbook-migrate-model", ".agents/skills/new-skill",
+                        "python/sglang/multimodal_gen/.agents/skills/sglang-diffusion-add-model"):
+                Path(d, rel).mkdir(parents=True)
+                Path(d, rel, "SKILL.md").write_text("---\nname: x\n---\n")
+            Path(d, ".agents/skills/no-skill-md").mkdir(parents=True)
+            self.assertEqual(check_framework_skills.table_names(self.INDEX),
+                             ["debug-cuda-crash", "gone-skill", "write-sglang-test"])
+            r = check_framework_skills.check(self.INDEX, d)
+            self.assertEqual(r["missing"], ["gone-skill"])
+            self.assertEqual(r["unindexed"], ["new-skill", "sglang-diffusion-add-model"])
+            self.assertEqual(r["present"], 5)
 
 
 class ScanCiTest(unittest.TestCase):

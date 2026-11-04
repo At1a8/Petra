@@ -74,7 +74,9 @@ Where that stands, from sglang's history and issues (October 2026):
 | performance optimization: bubbles, H2D/D2H copies, overlap; kernels to the kernel agent | `perf_engineer` (profile), `architect` (perf_plan), `knowledge/system_perf.md`, `scripts/audit_host_syncs.py`; kernel-level opportunities as kernel hand-offs |
 | accuracy validation: accuracy, long context, stress, concurrency, same-pattern baseline first | `verify_engineer`, `investigator`, `knowledge/validation_doctrine.md`, `debugging_playbook.md` |
 | performance and composability: A/B, combination tests (parallelism × speculative decoding × quantization × operator) | `perf_engineer` (perf_eval), `knowledge/perf_evaluation.md`, `composability.md` |
+| review before the PR: agents produce plausible changes, so the diff and its evidence get an independent read | `reviewer` (review; optionally on another model, `review_model`); requested changes go back through Implement and Verify |
 | PR and upstream CI: formatting, minimal diff, HIP-only or switch-gated, data in the description, CI fixes and rebases; owner answers review, maintainers merge | `pr_engineer`, `knowledge/pr_playbook.md`, `guardrails.md` |
+| the framework's own procedures (tests, kernels, profiling, crash debugging) | referenced in place from the task worktree through `knowledge/frameworks/sglang/skills.md`; ROCm differences in `knowledge/platforms/rocm_skills.md`; drift checked by `scripts/check_framework_skills.py` |
 | knowledge: feature skills, known issues, CUDA → AMD table, pitfalls | `curator`, `knowledge/` |
 | safety: measured data wins, budgets, automatic rollback | `petra.js` (budgets, independent gates, rollback), `knowledge/guardrails.md` |
 
@@ -88,7 +90,7 @@ feature  Setup → Spec → Recon → Design ─┐
 issue    Setup → Triage → Reproduce → Diagnose ─┤
 ci       Setup → Classify → Bisect ─────────────┼→ Implement (per WP: implementer → test_engineer, rollback on failure)
 perf     Setup → Profile → Plan ────────────────┘   → Kernel (hand-offs → kernel back end, gains integrated as WPs)
-                                                     → Verify (↔ Investigate) → Performance → PR → Report
+                                                     → Verify (↔ Investigate) → Performance → Review → PR → Report
 scan     Collect → Dispatch → Report
 ```
 
@@ -105,6 +107,10 @@ their owner (`scripts/restore_owner.sh`), so host-side git and the human's push 
 
 - Gates G0–G5 (`validation_doctrine.md`), plus mode gates (`issue_repro`, `failing_test`) and the
   composability gates of every dimension a task touches.
+- Performance evidence counts only on the workload fixed before any profile is read and on the
+  serving path the task targets (`perf_evaluation.md` §3); `mode=perf` requires the workload.
+- An independent review closes every code change before the PR; its requested changes are work
+  packages, bounded by `max_review_rounds`.
 - A failed verification goes to the investigator: a fix becomes new work packages; a failure the
   same-pattern baseline shares becomes a known issue and the gate is re-judged on the rest.
 - Budgets: fix rounds per work package, investigation rounds, work packages per task, agent retries.
@@ -159,8 +165,9 @@ CI pass rate, review rounds).
 
 ## 10. Status
 
-Implemented: the orchestration with five modes and pluggable kernel back ends (none, geak, command), 15
-roles, the migrated knowledge base and templates,
+Implemented: the orchestration with five modes and pluggable kernel back ends (none, geak, command), 16
+roles, the migrated knowledge base and templates, the framework's own skills referenced in place with
+ROCm notes,
 the task-collection and audit scripts, a dry run of every control path on GEAK's runtime, offline unit
 tests. Not yet: shared server control and A/B runners (the director writes a launch script per run), a
 persistent ecosystem-matrix store, queue → run automation, resume for modes other than `feature`,

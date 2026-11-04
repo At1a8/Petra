@@ -15,7 +15,10 @@ export const meta = {
     'args.resume_from="implement" with args.run_dir (feature: continue after a human approved design.md), ' +
     'args.kernel_backend (none | geak | command; default none records kernel hand-offs only) with ' +
     'args.kernel_backend_dir (geak: the GEAK checkout) or args.kernel_backend_command (command), args.kernel_budget, ' +
-    'args.max_fix_rounds, args.max_investigate_rounds, args.max_work_packages, args.agent_retries, args.agent_timeout_ms.',
+    'args.review_model (the reviewer\'s model, where the runtime takes one per call), ' +
+    'args.max_fix_rounds, args.max_investigate_rounds, args.max_review_rounds, args.max_work_packages, ' +
+    'args.agent_retries, args.agent_timeout_ms. mode=perf requires args.workload: the fixed benchmark every ' +
+    'measurement uses.',
   phases: [
     { title: 'Setup', detail: 'director: run dir, task branch and worktree, launch scripts, baseline (not in scan)' },
     { title: 'Spec', detail: 'director: feature_spec.md with measurable acceptance criteria [feature]' },
@@ -33,6 +36,7 @@ export const meta = {
     { title: 'Verify', detail: 'verify_engineer: G0-G4 against the same-pattern baseline plus mode gates; investigator loop on failure' },
     { title: 'Investigate', detail: 'investigator: controls first, hypothesis ledger, fix or baseline bug' },
     { title: 'Performance', detail: 'perf_engineer: G5 equal-budget A/B and guard workloads' },
+    { title: 'Review', detail: 'reviewer: independent review of the diff and its evidence; requested changes come back as work packages' },
     { title: 'PR', detail: 'pr_engineer: hygiene, lint, upstream sync, pr_body.md, exact push command; never pushes' },
     { title: 'Collect', detail: 'scout: upstream changes, issues, CI trackers, platform gates -> candidates [scan]' },
     { title: 'Dispatch', detail: 'dispatcher: type, level, dependencies, effort, ranking, ecosystem-matrix changes [scan]' },
@@ -58,6 +62,10 @@ if (!PETRA) {
 }
 if (MODE !== 'scan' && !A.task) throw new Error(`args.task is required for mode=${MODE}`);
 if (MODE !== 'scan' && !A.framework_dir) throw new Error(`args.framework_dir is required for mode=${MODE}`);
+if (MODE === 'perf' && !A.workload) {
+  throw new Error('args.workload is required for mode=perf: the fixed benchmark every measurement uses ' +
+    '(model, input/output lengths, concurrency, budget), fixed before any profile is read');
+}
 
 const int = (v, d) => {
   const n = parseInt(v, 10);
@@ -65,6 +73,8 @@ const int = (v, d) => {
 };
 const MAX_FIX_ROUNDS = int(A.max_fix_rounds, 2);          // extra implement rounds per work package
 const MAX_INVESTIGATE = int(A.max_investigate_rounds, 3); // verify -> investigate -> verify cycles
+const MAX_REVIEW = int(A.max_review_rounds, 2);           // review -> fix -> verify -> review cycles
+const REVIEW_MODEL = String(A.review_model || '').trim();
 const MAX_WPS = Math.max(1, int(A.max_work_packages, 12));
 const AGENT_RETRIES = Math.max(1, int(A.agent_retries, 3));
 const AGENT_TIMEOUT_MS = int(A.agent_timeout_ms, 3 * 3600 * 1000);
@@ -191,12 +201,12 @@ function withTimeout(p) {
 
 // One agent call with retries; resolves null (never throws) so every caller
 // decides what a missing answer means for its gate.
-async function call(role, sub, ins, schema, label) {
+async function call(role, sub, ins, schema, label, opts) {
   const lbl = label || `${role}:${sub}`;
   const prompt = rolePrompt(role, sub, ins);
   for (let attempt = 1; attempt <= AGENT_RETRIES; attempt++) {
     try {
-      const r = await withTimeout(agent(prompt, { label: lbl, phase: PHASE, schema }));
+      const r = await withTimeout(agent(prompt, { label: lbl, phase: PHASE, schema, ...(opts || {}) }));
       if (r) return r;
       log(`  [petra] ${lbl} returned nothing (attempt ${attempt}/${AGENT_RETRIES})`);
     } catch (e) {
@@ -286,6 +296,8 @@ const CLASSIFY = S({
 const BISECT = S({ culprit: str, confirmed: bool, work_packages: WPS, evidence: str }, ['culprit', 'confirmed']);
 const PROFILE = S({
   analysis_path: str,
+  path_ok: bool,
+  path_evidence: str,
   metrics: obj,
   opportunities: arr(S({
     id: str,
@@ -295,7 +307,7 @@ const PROFILE = S({
     upper_bound_pct: num,
     owner: { type: 'string', enum: ['petra', 'kernel_workflow', 'hyperloom'] },
   }, ['id', 'kind', 'owner'])),
-}, ['analysis_path', 'opportunities']);
+}, ['analysis_path', 'path_ok', 'opportunities']);
 const PERF_PLAN = S({
   work_packages: WPS,
   handoffs: arr(S({
@@ -331,8 +343,26 @@ const INVESTIGATE = S({
   known_issue: obj,
   summary: str,
 }, ['verdict']);
-const PERF = S({ claim_reproduced: bool, guards_ok: bool, results: arr(), summary: str },
-  ['claim_reproduced', 'guards_ok']);
+const PERF = S({
+  claim_reproduced: bool,
+  guards_ok: bool,
+  workload_unchanged: bool,
+  path_ok: bool,
+  results: arr(),
+  summary: str,
+}, ['claim_reproduced', 'guards_ok', 'workload_unchanged', 'path_ok']);
+const REVIEW = S({
+  verdict: { type: 'string', enum: ['approve', 'changes_requested', 'blocked'] },
+  findings: arr(S({
+    severity: { type: 'string', enum: ['blocker', 'major', 'minor'] },
+    where: str,
+    issue: str,
+    evidence: str,
+  }, ['severity', 'issue'])),
+  work_packages: WPS,
+  review_path: str,
+  summary: str,
+}, ['verdict', 'findings', 'review_path']);
 const PR = S({
   branch: str,
   title: str,
@@ -521,9 +551,50 @@ async function verifyLoop(extraGates) {
 async function performance(claim) {
   enter('Performance');
   const p = await call('perf_engineer', 'perf_eval', inputs({ claim: claim || '' }), PERF);
-  const ok = !!p && p.guards_ok === true && (!claim || p.claim_reproduced === true);
-  note('Performance', ok ? 'pass' : 'fail', p ? (p.summary || '') : 'the performance engineer returned nothing');
-  return { ok, claimed: !!claim, reproduced: !!(p && p.claim_reproduced === true) };
+  // A measurement counts only on the fixed workload and on the path the task targets.
+  const trusted = !!p && p.workload_unchanged === true && p.path_ok === true;
+  const ok = trusted && p.guards_ok === true && (!claim || p.claim_reproduced === true);
+  const why = !p ? 'the performance engineer returned nothing'
+    : !trusted ? `not trusted: ${p.workload_unchanged !== true ? 'workload changed' : 'the run left the intended path'}; ${p.summary || ''}`
+      : (p.summary || '');
+  note('Performance', ok ? 'pass' : 'fail', why);
+  return { ok, trusted, claimed: !!claim, reproduced: trusted && p.claim_reproduced === true };
+}
+
+// An independent review of the diff and its evidence. Requested changes come back as work packages:
+// implemented, verified again (and measured again when the task measures), then reviewed again.
+async function reviewLoop(extraGates, perfClaim, runPerf) {
+  for (let round = 0; ; round++) {
+    enter('Review');
+    const rv = await call('reviewer', 'review', inputs({ round, extra_gates: extraGates || [], claim: perfClaim || '' }),
+      REVIEW, `reviewer#${round}`, REVIEW_MODEL ? { model: REVIEW_MODEL } : undefined);
+    if (!rv) {
+      note('Review', 'fail', 'the reviewer returned nothing');
+      return { ok: false, at: 'Review' };
+    }
+    if (rv.review_path) C.review_path = rv.review_path;
+    const findings = rv.findings || [];
+    const count = (s) => findings.filter((f) => f.severity === s).length;
+    note('Review', rv.verdict, `${count('blocker')} blocker, ${count('major')} major, ${count('minor')} minor` +
+      `${rv.summary ? `; ${rv.summary}` : ''}`);
+    if (rv.verdict === 'approve') {
+      if (count('blocker') === 0) return { ok: true };
+      note('Review', 'fail', 'an approval with a blocker finding is not an approval');
+      return { ok: false, at: 'Review' };
+    }
+    if (rv.verdict === 'blocked') return { ok: false, at: 'Review' };
+    const wps = rv.work_packages || [];
+    if (!wps.length || round >= MAX_REVIEW) {
+      note('Review', 'fail', wps.length ? `review budget exhausted (max_review_rounds=${MAX_REVIEW})`
+        : 'changes requested without work packages');
+      return { ok: false, at: 'Review' };
+    }
+    const fix = await implementAll(wps);
+    if (!fix.ok) return { ok: false, at: 'Implement' };
+    const ver = await verifyLoop(extraGates);
+    if (!ver.ok) return { ok: false, at: 'Verify' };
+    if (runPerf && !(await performance(perfClaim)).ok) return { ok: false, at: 'Performance' };
+  }
 }
 
 async function preparePR() {
@@ -630,7 +701,7 @@ async function deliver(wps, extraGates, perfClaim, runPerf) {
   if (runPerf) {
     const perf = await performance(perfClaim);
     if (!perf.ok) {
-      if (perf.claimed && !perf.reproduced && MODE === 'perf') {
+      if (perf.trusted && perf.claimed && !perf.reproduced && MODE === 'perf') {
         // A performance change without a measured win is dropped (guardrails.md).
         const rb = await call('implementer', 'rollback', inputs({ work_package: { id: 'ALL', goal: 'drop the change', test: '' },
           reason: 'no measured win' }), ROLLBACK, 'implementer:rollback:ALL');
@@ -641,6 +712,10 @@ async function deliver(wps, extraGates, perfClaim, runPerf) {
     }
     if (stopHere('Performance')) return finish('stopped', 'Performance');
   }
+
+  const rev = await reviewLoop(extraGates, perfClaim, runPerf);
+  if (!rev.ok) return finish('blocked', rev.at);
+  if (stopHere('Review')) return finish('stopped', 'Review');
 
   if (!(await preparePR())) return finish('blocked', 'PR');
   return finish('ready_for_review', 'PR');
@@ -803,6 +878,10 @@ async function runPerf() {
   const pf = await call('perf_engineer', 'profile', inputs(), PROFILE);
   if (!pf) {
     note('Profile', 'fail', 'no profile');
+    return finish('blocked', 'Profile');
+  }
+  if (pf.path_ok !== true) {
+    note('Profile', 'fail', `the profiled run did not take the intended path: ${pf.path_evidence || 'no evidence given'}`);
     return finish('blocked', 'Profile');
   }
   C.analysis_path = pf.analysis_path;

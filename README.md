@@ -13,10 +13,10 @@ Why it exists and how it maps onto the agreed design: [`docs/design.md`](docs/de
 
 | Mode | Task | Phases | Ends with |
 |---|---|---|---|
-| `feature` | an upstream PR or design to bring to AMD | Setup → Spec → Recon → Design → Implement → (Kernel) → Verify → Performance → PR → Report | branch + PR body + validation report |
-| `issue` | an AMD user issue | Setup → Triage → Reproduce → Diagnose (skipped for an existing fix PR) → Implement → (Kernel) → Verify → (Performance) → PR → Report | fix PR, or a conclusion (triaged, not reproduced, fixed on main, diagnosed); always a reply draft |
-| `ci` | a red AMD CI job or Failure Tracker cluster | Setup → Classify → Bisect → Implement → (Kernel) → Verify → PR → Report | fix PR, or a handover for flaky/infrastructure failures |
-| `perf` | a system-level performance goal for a model and workload | Setup → Profile → Plan → Implement → (Kernel) → Verify → Performance → PR → Report | PR with a measured win, or the change dropped; kernel-level items go to the kernel back end |
+| `feature` | an upstream PR or design to bring to AMD | Setup → Spec → Recon → Design → Implement → (Kernel) → Verify → Performance → Review → PR → Report | branch + PR body + validation report |
+| `issue` | an AMD user issue | Setup → Triage → Reproduce → Diagnose (skipped for an existing fix PR) → Implement → (Kernel) → Verify → (Performance) → Review → PR → Report | fix PR, or a conclusion (triaged, not reproduced, fixed on main, diagnosed); always a reply draft |
+| `ci` | a red AMD CI job or Failure Tracker cluster | Setup → Classify → Bisect → Implement → (Kernel) → Verify → Review → PR → Report | fix PR, or a handover for flaky/infrastructure failures |
+| `perf` | a system-level performance goal for a model and a fixed workload | Setup → Profile → Plan → Implement → (Kernel) → Verify → Performance → Review → PR → Report | PR with a measured win, or the change dropped; kernel-level items go to the kernel back end |
 | `scan` | none — collect tasks from upstream commits, AMD issues, CI failures and platform gates (host-sync leads on request) | Collect → Dispatch → Report | a ranked task queue with the arguments to start each task |
 
 Phases in parentheses run only when they apply: Kernel when there is a kernel hand-off and
@@ -26,6 +26,10 @@ Every implementation runs one work package at a time; an independent test engine
 test and the feature-off check, and a package that keeps failing is rolled back. Verification failures
 go to an investigator that runs the controls before any instrumentation and returns a fix, a proof
 that the failure is pre-existing on the baseline, or an inconclusive verdict that stops the task.
+Before the PR, a reviewer reads the diff and its evidence the way a maintainer would; requested
+changes become work packages that go through Implement and Verify again. Performance numbers count
+only on the workload fixed at Setup and on the serving path the task targets
+([`knowledge/perf_evaluation.md`](knowledge/perf_evaluation.md) §3).
 
 Kernel-level work — tuning a kernel Petra wrote for a feature, or a kernel-level performance
 opportunity — is handed to a **kernel workflow back end** in the Kernel phase between Implement and
@@ -47,8 +51,8 @@ JSON; `petra.js` holds the schemas and branches only on their required fields. F
 the roles:
 
 - only the **implementer** edits framework source, and only in the task's worktree;
-- the roles that measure (test engineer, verify engineer, performance engineer) never edit framework
-  source and never reuse anyone else's numbers: they run everything again themselves;
+- the roles that measure (test engineer, verify engineer, performance engineer) and the reviewer never
+  edit framework source; the measuring ones never reuse anyone else's numbers but run everything again;
 - the **curator** edits only Petra's own `knowledge/` and leaves the edits uncommitted for review;
 - no role pushes or posts: the PR engineer returns the exact `git push`, issue replies are drafts.
 
@@ -65,7 +69,8 @@ the roles:
 | `test_engineer` | Implement | re-runs each package's unit test on its commit and checks that behaviour with the feature off is unchanged |
 | `verify_engineer` | Verify | runs the correctness gates (G0, G2–G4, composability, the mode's gate) on fresh servers against a same-pattern baseline, classifying and counting every failure |
 | `investigator` | Investigate, Diagnose | runs the controls first, then one-mechanism-at-a-time experiments with a hypothesis ledger; returns fix work packages, a known issue the baseline shares, an inconclusive verdict, or (for an issue) a root cause outside the AMD side; probes only behind switches |
-| `perf_engineer` | Profile, Performance | turns a steady-state trace into metrics and opportunities with upper bounds; evaluates changes at equal budget against noise and guard workloads |
+| `perf_engineer` | Profile, Performance | checks the run took the intended path, turns a steady-state trace into fixed tables (kernels, overlap, fuse patterns, layers), metrics and opportunities with upper bounds; evaluates changes at equal budget on the fixed workload, against noise and guard workloads |
+| `reviewer` | Review | reads the diff and its evidence as a maintainer would: shapes, dtypes, parallel layouts, graphs, fallbacks, do-no-harm, the framework's conventions, a fair benchmark; requested changes come back as work packages; can run on another model (`review_model`) |
 | `kernel_liaison` | Kernel | turns a kernel hand-off into the back end's task, runs `command` back ends, judges the result on the back end's own verification and returns a gain as a work package |
 | `pr_engineer` | PR | hygiene, lint, CI registration, one commit per work package, a trial merge of main, feature off on the final commit, the PR body and the push command |
 | `curator` | Report | writes what the run proved into `knowledge/` (known issues, feature skills, CUDA → AMD rows, method lessons), every number traceable to the run |
@@ -202,7 +207,8 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `petra_dir` | absolute path of this checkout (required) |
 | `task` | the upstream PR/design, issue URL, CI job/cluster or performance goal (required except `scan`) |
 | `framework_dir` | the framework checkout; Petra works in a worktree of it (required except `scan`) |
-| `framework`, `model_path`, `platform`, `gpu_ids`, `workload` | target and environment |
+| `framework`, `model_path`, `platform`, `gpu_ids` | target and environment |
+| `workload` | the benchmark every measurement uses, e.g. `{"isl":8192,"osl":1024,"conc":64}`; required for `perf`, fixed at Setup |
 | `container` | only when Petra runs on the host: the framework's container, reached with `docker exec` |
 | `exp_root` | where run directories go (default `<petra_dir>/exp`) |
 | `kernel_backend` | `none` (default) \| `geak` \| `command`: where kernel hand-offs go |
@@ -213,11 +219,18 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `sources`, `since` | `scan`: any of `upstream`, `issues`, `ci`, `hardware`, `perf`; the start of the window |
 | `stop_after` | stop after the named phase (e.g. `Design`) |
 | `resume_from`, `run_dir` | `feature`: `implement` continues a run that stopped at Design once a human approved `design.md` |
-| `max_fix_rounds`, `max_investigate_rounds`, `max_work_packages`, `agent_retries`, `agent_timeout_ms` | budgets |
+| `review_model` | the reviewer's model, passed with its agent call (GEAK's runtime takes a model per call; elsewhere it depends on the runtime) |
+| `max_fix_rounds`, `max_investigate_rounds`, `max_review_rounds`, `max_work_packages`, `agent_retries`, `agent_timeout_ms` | budgets |
 
 Human checkpoints: any `stop_after`; L3 tasks and designs the architect flags stop at Design
-(`awaiting_design_review`); the PR engineer returns the exact `git push` instead of pushing; issue
-replies are drafts in the run directory. Every run ends with a report, whatever its status.
+(`awaiting_design_review`); a review the reviewer marks `blocked` stops before the PR; the PR engineer
+returns the exact `git push` instead of pushing; issue replies are drafts in the run directory. Every
+run ends with a report, whatever its status.
+
+The framework's own skills (sglang's `.agents/skills/`) are referenced in place, never copied: each
+role reads the ones [`knowledge/frameworks/sglang/skills.md`](knowledge/frameworks/sglang/skills.md)
+lists for it from the task worktree, so they match the code it changes, with ROCm differences in
+[`knowledge/platforms/rocm_skills.md`](knowledge/platforms/rocm_skills.md).
 
 ## Scripts
 
@@ -234,6 +247,9 @@ search API allows 10 requests a minute).
 
 `scripts/restore_owner.sh` (POSIX sh) gives what root wrote in the container back to the owner of the
 checkout it lives in; every agent runs it after a git write ([`knowledge/env_hygiene.md`](knowledge/env_hygiene.md)).
+`scripts/check_framework_skills.py --framework-dir <dir>` checks the skills index against a framework
+checkout: skills it names that are gone, and new ones it does not name yet (the scout runs it on every
+scan).
 
 ## Tests
 
@@ -249,13 +265,14 @@ Petra/
 ├── petra.js                 # orchestration: five modes, gates, budgets, rollback, kernel back ends
 ├── roles/                   # director, scout, dispatcher, analyst, architect, implementer, test_engineer,
 │                            # verify_engineer, investigator, perf_engineer, issue_triager, ci_guardian,
-│                            # kernel_liaison, pr_engineer, curator
+│                            # kernel_liaison, reviewer, pr_engineer, curator
 ├── knowledge/
 │   ├── dev_methodology.md   # phases, artifacts, gates (the contract)
 │   ├── validation_doctrine.md, debugging_playbook.md, perf_evaluation.md, env_hygiene.md, pr_playbook.md
 │   ├── guardrails.md        # safety constraints and community conduct
 │   ├── dispatch.md, issue_triage.md, ci_triage.md, system_perf.md, composability.md, kernel_backends.md
 │   ├── frameworks/sglang/feature_dev_map.md, platforms/rocm.md, known_issues.md
+│   ├── frameworks/sglang/skills.md, platforms/rocm_skills.md   # sglang's own skills: index + ROCm notes
 │   └── feature_skills/      # validated plans per feature (hisparse-v2 first)
 ├── templates/               # feature_spec, design, experiment_ledger, validation_report, pr_body,
 │                            # issue_triage, ci_triage, perf_analysis, task_queue

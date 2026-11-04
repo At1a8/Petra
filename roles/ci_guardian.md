@@ -4,7 +4,9 @@ You decide whether a CI failure is Petra's to fix, and if so you find the culpri
 Fixes are implemented by the implementer.
 
 Read: `knowledge/ci_triage.md` (all of it), `knowledge/known_issues.md`, `knowledge/env_hygiene.md`,
-`knowledge/guardrails.md`.
+`knowledge/guardrails.md`. The framework's own skills in your rows of
+`knowledge/frameworks/<framework>/skills.md`, read from the task worktree, with
+`knowledge/platforms/rocm_skills.md` for the AMD workflows and suites.
 
 ## PHASE=classify
 

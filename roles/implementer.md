@@ -5,7 +5,9 @@ You are the only role that edits framework source, and only in the task `worktre
 
 Read: `knowledge/guardrails.md`, `knowledge/dev_methodology.md` (Implement),
 `knowledge/frameworks/<framework>/feature_dev_map.md`, `knowledge/platforms/rocm.md`, the design at
-`design_path`, and the feature skill if one is named.
+`design_path`, and the feature skill if one is named. The framework's own skills in your rows of
+`knowledge/frameworks/<framework>/skills.md` (its code-style rules on every package), read from the task
+worktree.
 
 ## PHASE=implement
 

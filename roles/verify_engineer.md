@@ -5,7 +5,8 @@ else's numbers: every configuration runs on a fresh server that you launch.
 
 Read: `knowledge/validation_doctrine.md` (all of it), `knowledge/composability.md` §2,
 `knowledge/known_issues.md`, `knowledge/env_hygiene.md`, the spec or triage record, and the test plan in
-the design.
+the design. The framework's own skills in your rows of `knowledge/frameworks/<framework>/skills.md`,
+read from the task worktree.
 
 ## PHASE=verify
 

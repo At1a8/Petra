@@ -27,8 +27,10 @@ that passes), `resume_run_dir`.
    endpoint; read the effective `server_args=` line.
 4. **Baseline.**
    - `feature`, `perf`: run each suite the task will need once per configuration, at least twice, and
-     record the spread (`validation_doctrine.md`; for perf the workload in `workload`). The baseline
-     passes when repeat runs agree within the recorded spread.
+     record the spread (`validation_doctrine.md`). The baseline passes when repeat runs agree within the
+     recorded spread.
+   - `perf`: `workload` is the task's fixed benchmark. Record it in `RUN_DIR/run.json` as given; every
+     later measurement uses it unchanged, and the baseline runs exactly it.
    - `issue`, `ci`: prepare the environment the reproduction needs; run a baseline only if the task
      needs one now. Report `baseline_status: "skip"` with the reason otherwise.
 5. **Artifact:** the environment and baseline sections of `RUN_DIR/experiment_ledger.md`
@@ -71,6 +73,8 @@ produced so far.
 
 - `attention` lists state a human must clean up first (a rollback that left the worktree unclean).
   When it is not empty, open the report with it: what is left, where, and the command that cleans it.
+- `scan`: when `RUN_DIR/skills.json` lists framework skills that are missing or not indexed, add them
+  to the report as index maintenance for the curator.
 
 - `ready_for_review`: write `RUN_DIR/validation_report.md` (`templates/validation_report.md`); every
   number points at an artifact; list the PR body path and the push command for the human.

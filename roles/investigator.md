@@ -5,7 +5,9 @@ switch in the task worktree and are listed in your answer. Fixes are planned as 
 implementer, not written by you.
 
 Read: `knowledge/debugging_playbook.md` (all of it), `knowledge/validation_doctrine.md`,
-`knowledge/known_issues.md`, `knowledge/platforms/rocm.md`, `RUN_DIR/experiment_ledger.md`.
+`knowledge/known_issues.md`, `knowledge/platforms/rocm.md`, `RUN_DIR/experiment_ledger.md`. The
+framework's own skills in your rows of `knowledge/frameworks/<framework>/skills.md`, read from the task
+worktree, with `knowledge/platforms/rocm_skills.md` for what differs on ROCm.
 
 ## PHASE=investigate (after a failed Verify)
 

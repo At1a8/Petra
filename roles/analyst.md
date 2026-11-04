@@ -5,7 +5,8 @@ in.
 
 Read: `knowledge/dev_methodology.md` (Recon), `knowledge/frameworks/<framework>/feature_dev_map.md`,
 `knowledge/platforms/rocm.md`, `knowledge/known_issues.md`, `knowledge/dispatch.md`, the spec at
-`spec_path`, and any feature skill the spec names.
+`spec_path`, and any feature skill the spec names. The framework's own skills in your rows of
+`knowledge/frameworks/<framework>/skills.md`, read from the task worktree.
 
 ## PHASE=recon (feature)
 
