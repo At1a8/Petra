@@ -456,8 +456,14 @@ const IMPL = S({
   kernel_handoff: { type: ['object', 'null'] },
   notes: str,
 }, ['wp', 'status']);
-const UNIT = S({ wp: str, unit_pass: bool, feature_off_unchanged: bool, failure_summary: str, evidence: str },
-  ['wp', 'unit_pass', 'feature_off_unchanged']);
+const UNIT = S({
+  wp: str,
+  unit_pass: bool,
+  feature_off_unchanged: bool,
+  fails_without_change: { type: 'string', enum: ['parent', 'mutant', 'no', 'n/a'] },
+  failure_summary: str,
+  evidence: str,
+}, ['wp', 'unit_pass', 'feature_off_unchanged', 'fails_without_change']);
 const ROLLBACK = S({ wp: str, reset_to: str, clean: bool }, ['reset_to', 'clean']);
 const VERIFY = S({
   all_pass: bool,
@@ -474,12 +480,13 @@ const INVESTIGATE = S({
 }, ['verdict']);
 const PERF = S({
   claim_reproduced: bool,
+  held_out_ok: bool,
   guards_ok: bool,
   workload_unchanged: bool,
   path_ok: bool,
   results: arr(),
   summary: str,
-}, ['claim_reproduced', 'guards_ok', 'workload_unchanged', 'path_ok']);
+}, ['claim_reproduced', 'held_out_ok', 'guards_ok', 'workload_unchanged', 'path_ok']);
 const REVIEW = S({
   verdict: { type: 'string', enum: ['approve', 'changes_requested', 'blocked'] },
   findings: arr(S({
@@ -487,6 +494,7 @@ const REVIEW = S({
     where: str,
     issue: str,
     evidence: str,
+    hack: str, // knowledge/reward_hacks.md id, or "new"
   }, ['severity', 'issue'])),
   work_packages: WPS,
   review_path: str,
@@ -617,11 +625,20 @@ async function implementAll(wps) {
       const ut = await call('test_engineer', 'unit',
         inputs({ work_package: wp, commit: im.commit, unit_test_cmd: im.unit_test_cmd || wp.test }),
         UNIT, `test_engineer:${wp.id}#${round}`);
-      if (ut && ut.unit_pass === true && ut.feature_off_unchanged === true) {
+      // A unit test proves something only if it fails without the package: on the parent commit, or
+      // on a copy of the change broken in one way. Only a docs package has nothing to fail.
+      const bites = !!ut && (['parent', 'mutant'].includes(ut.fails_without_change)
+        || (ut.fails_without_change === 'n/a' && wp.kind === 'docs'));
+      if (ut && ut.unit_pass === true && ut.feature_off_unchanged === true && bites) {
         passed = true;
         R.done.push({ wp: wp.id, commit: im.commit, evidence: ut.evidence || '' });
+      } else if (!ut) {
+        feedback = 'the test engineer returned nothing';
+      } else if (ut.unit_pass === true && ut.feature_off_unchanged === true) {
+        feedback = `the unit test does not fail without the change (fails_without_change=${ut.fails_without_change}); `
+          + `make it fail on the parent commit or on a copy broken in one way${ut.failure_summary ? `: ${ut.failure_summary}` : ''}`;
       } else {
-        feedback = ut ? (ut.failure_summary || 'the unit or feature-off gate failed') : 'the test engineer returned nothing';
+        feedback = ut.failure_summary || 'the unit or feature-off gate failed';
       }
     }
     if (!passed) {
@@ -680,14 +697,18 @@ async function verifyLoop(extraGates) {
 async function performance(claim) {
   enter('Performance');
   const p = await call('perf_engineer', 'perf_eval', inputs({ claim: claim || '' }), PERF);
-  // A measurement counts only on the fixed workload and on the path the task targets.
+  // A measurement counts only on the fixed workload and on the path the task targets; a gain counts
+  // only if it also holds at the held-out operating point nobody tuned on.
   const trusted = !!p && p.workload_unchanged === true && p.path_ok === true;
-  const ok = trusted && p.guards_ok === true && (!claim || p.claim_reproduced === true);
+  const reproduced = trusted && p.claim_reproduced === true && p.held_out_ok === true;
+  const ok = trusted && p.guards_ok === true && (!claim || reproduced);
   const why = !p ? 'the performance engineer returned nothing'
     : !trusted ? `not trusted: ${p.workload_unchanged !== true ? 'workload changed' : 'the run left the intended path'}; ${p.summary || ''}`
-      : (p.summary || '');
+      : claim && p.claim_reproduced === true && p.held_out_ok !== true
+        ? `the gain does not hold at the held-out operating point; ${p.summary || ''}`
+        : (p.summary || '');
   note('Performance', ok ? 'pass' : 'fail', why);
-  return { ok, trusted, claimed: !!claim, reproduced: trusted && p.claim_reproduced === true };
+  return { ok, trusted, claimed: !!claim, reproduced };
 }
 
 // An independent review of the diff and its evidence. Requested changes come back as work packages:

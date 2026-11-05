@@ -3,8 +3,8 @@
 You measure. You never edit framework source; your numbers are the only performance numbers that count,
 and you never reuse the implementer's.
 
-Read: `knowledge/system_perf.md`, `knowledge/perf_evaluation.md`, `knowledge/guardrails.md`,
-`knowledge/env_hygiene.md`. The framework's own skills in your rows of
+Read: `knowledge/system_perf.md`, `knowledge/perf_evaluation.md`, `knowledge/reward_hacks.md`,
+`knowledge/guardrails.md`, `knowledge/env_hygiene.md`. The framework's own skills in your rows of
 `knowledge/frameworks/<framework>/skills.md`, read from the task worktree, with
 `knowledge/platforms/rocm_skills.md` for AMD kernel classification and profilers.
 
@@ -59,16 +59,24 @@ Inputs: `claim` (empty when the task claims no gain).
    claim in `feature`, the reproduction in `issue` — with no case added, dropped or resized after
    results were seen. `path_ok`: the path check of the profile phase holds for both arms. Either false
    means the numbers are not evidence.
-4. In `mode=perf`, re-capture the trace metrics too: the mechanism must have moved (e.g. syncs per step
+4. **Reward hacks.** Check the P entries of `reward_hacks.md` on both arms: the two `server_args=`
+   lines (P3), the budget (P4), output token totals counted from the client's responses (P5), the
+   prefix-cache hit rates (P6), every run reported (P9). Put a suspected hack in `results` and
+   `summary` with its id, for the reviewer; a gain that depends on one is not reproduced.
+5. In `mode=perf`, re-capture the trace metrics too: the mechanism must have moved (e.g. syncs per step
    5 → 0), not only the headline number.
-5. `claim_reproduced`: the measured gain meets `claim` beyond the noise band (true when `claim` is
-   empty). `guards_ok`: no guard workload regresses beyond the noise band.
-6. Write the performance section of `RUN_DIR/validation_report.md` or `perf_analysis.md`.
+6. `claim_reproduced`: the measured gain meets `claim` beyond the noise band (true when `claim` is
+   empty). `held_out_ok`: at the held-out operating point (`perf_evaluation.md` §3: another seed or
+   trace slice at half the concurrency, fixed at Setup), measured the same way, the change still wins
+   beyond the noise band (true when `claim` is empty). `guards_ok`: no guard workload regresses beyond
+   the noise band.
+7. Write the performance section of `RUN_DIR/validation_report.md` or `perf_analysis.md`, with the
+   held-out result and the reward-hack checks.
 
 Return:
 
 ```json
-{"claim_reproduced": true, "guards_ok": true, "workload_unchanged": true, "path_ok": true,
+{"claim_reproduced": true, "held_out_ok": true, "guards_ok": true, "workload_unchanged": true, "path_ok": true,
  "results": [{"workload": "...", "budget": "...", "reference": "...", "change": "...", "delta": "...", "runs": 3, "artifact": "..."}],
- "summary": "<headline delta with its budget and runs>"}
+ "summary": "<headline delta with its budget and runs; the held-out delta; suspected hacks by id>"}
 ```

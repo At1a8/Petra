@@ -1,5 +1,7 @@
 # Petra
 
+**English** | [简体中文](README.zh-CN.md)
+
 Petra is the framework agent for AMD GPUs in open-source LLM inference frameworks, starting with
 sglang. It turns one task — an upstream feature to bring to AMD, an AMD user's issue, a red AMD CI
 job, a system-level performance gap — into a pull request a maintainer can review: **correct first**
@@ -31,13 +33,16 @@ model for `feature` and `perf`, the fixed workload for `perf` — starts nothing
 questions, one per field, each with options or a default. A complete definition skips the Intake.
 
 Every implementation runs one work package at a time; an independent test engineer re-runs its unit
-test and the feature-off check, and a package that keeps failing is rolled back. Verification failures
-go to an investigator that runs the controls before any instrumentation and returns a fix, a proof
-that the failure is pre-existing on the baseline, or an inconclusive verdict that stops the task.
-Before the PR, a reviewer reads the diff and its evidence the way a maintainer would; requested
-changes become work packages that go through Implement and Verify again. Performance numbers count
-only on the workload fixed at Setup and on the serving path the task targets
-([`knowledge/perf_evaluation.md`](knowledge/perf_evaluation.md) §3).
+test, checks that the test fails without the change, and runs the feature-off check; a package that
+keeps failing is rolled back. Verification failures go to an investigator that runs the controls
+before any instrumentation and returns a fix, a proof that the failure is pre-existing on the
+baseline, or an inconclusive verdict that stops the task. Before the PR, a reviewer reads the diff and
+its evidence the way a maintainer would, starting from a catalog of known reward hacks — changes that
+move a number while breaking what it meant ([`knowledge/reward_hacks.md`](knowledge/reward_hacks.md));
+requested changes, and a test for every confirmed hack, become work packages that go through
+Implement and Verify again. Performance numbers count only on the workload fixed at Setup and on the
+serving path the task targets, and a gain only if it also holds at a held-out operating point fixed
+with the workload ([`knowledge/perf_evaluation.md`](knowledge/perf_evaluation.md) §3).
 
 Kernel-level work — tuning a kernel Petra wrote for a feature, or a kernel-level performance
 opportunity — is handed to a **kernel workflow back end** in the Kernel phase between Implement and
@@ -76,14 +81,14 @@ the roles:
 | `issue_triager` | Triage, Reproduce | sets the priority and the action from the issue, its comments and linked PRs; drafts the reply; writes the reproduction that becomes the issue's gate |
 | `ci_guardian` | Classify, Bisect | classifies a red job (code regression, dependency bump, test bug, flaky, infrastructure) and hands the last two over; finds and confirms the culprit commit and plans the fix |
 | `implementer` | Implement | one work package at a time, smallest diff, neutral with the feature off, HIP-only or behind a switch; functional kernels with unit tests (tuning is a hand-off); applies existing PRs and verified kernel gains; rolls back a failed package |
-| `test_engineer` | Implement | re-runs each package's unit test on its commit and checks that behaviour with the feature off is unchanged |
+| `test_engineer` | Implement | re-runs each package's unit test on its commit, checks that the test fails without the change (on the parent commit or a broken copy) and that behaviour with the feature off is unchanged |
 | `verify_engineer` | Verify | runs the correctness gates (G0, G2–G4, composability, the mode's gate) on fresh servers against a same-pattern baseline, classifying and counting every failure |
 | `investigator` | Investigate, Diagnose | runs the controls first, then one-mechanism-at-a-time experiments with a hypothesis ledger; returns fix work packages, a known issue the baseline shares, an inconclusive verdict, or (for an issue) a root cause outside the AMD side; probes only behind switches |
-| `perf_engineer` | Profile, Performance | checks the run took the intended path, turns a steady-state trace into fixed tables (kernels, overlap, fuse patterns, layers), metrics and opportunities with upper bounds; evaluates changes at equal budget on the fixed workload, against noise and guard workloads |
-| `reviewer` | Review | reads the diff and its evidence as a maintainer would: shapes, dtypes, parallel layouts, graphs, fallbacks, do-no-harm, the framework's conventions, a fair benchmark; requested changes come back as work packages; can run on another model (`review_model`) |
+| `perf_engineer` | Profile, Performance | checks the run took the intended path, turns a steady-state trace into fixed tables (kernels, overlap, fuse patterns, layers), metrics and opportunities with upper bounds; evaluates changes at equal budget on the fixed workload, against noise, guard workloads and a held-out operating point, checking the known measurement hacks |
+| `reviewer` | Review | reads the diff and its evidence as a maintainer would, starting from the catalog of known reward hacks: shapes, dtypes, parallel layouts, graphs, fallbacks, do-no-harm, the framework's conventions, a fair benchmark; requested changes, and a test for every confirmed hack, come back as work packages; can run on another model (`review_model`) |
 | `kernel_liaison` | Kernel | turns a kernel hand-off into the back end's task, runs `command` back ends, judges the result on the back end's own verification and returns a gain as a work package |
 | `pr_engineer` | PR | hygiene, lint, CI registration, one commit per work package, a trial merge of main, feature off on the final commit, the PR body and the push command |
-| `curator` | Report | writes what the run proved into `knowledge/` (known issues, feature skills, CUDA → AMD rows, method lessons), every number traceable to the run |
+| `curator` | Report | writes what the run proved into `knowledge/` (known issues, feature skills, CUDA → AMD rows, new reward hacks, method lessons), every number traceable to the run |
 
 ## Setup
 
@@ -323,7 +328,7 @@ scan). `scripts/latest_image.py [--variant rocm10-mi30x]` prints the newest dail
 
 ```bash
 GEAK_HOME=/path/to/GEAK node tests/dry_run.mjs   # every control path of petra.js on GEAK's runtime, no GPU
-python3 -m unittest discover -s tests             # the scripts' parsers and rules, the bootstrap; offline
+python3 -m unittest discover -s tests             # the scripts' parsers and rules, the bootstrap, the two READMEs in step; offline
 ```
 
 ## Layout
@@ -338,6 +343,7 @@ Petra/
 │   ├── dev_methodology.md   # phases, artifacts, gates (the contract)
 │   ├── validation_doctrine.md, debugging_playbook.md, perf_evaluation.md, env_hygiene.md, pr_playbook.md
 │   ├── guardrails.md        # safety constraints and community conduct
+│   ├── reward_hacks.md      # changes that move a number while breaking what it meant: tell, killed by
 │   ├── dispatch.md, issue_triage.md, ci_triage.md, system_perf.md, composability.md, kernel_backends.md
 │   ├── frameworks/sglang/feature_dev_map.md, platforms/rocm.md, known_issues.md
 │   ├── frameworks/sglang/skills.md, platforms/rocm_skills.md   # sglang's own skills: index + ROCm notes
@@ -347,7 +353,8 @@ Petra/
 ├── scripts/                 # task collection, audits, run_docker.sh, latest_image.py, restore_owner.sh
 ├── petra/bootstrap.py       # setup step 3, in the container; safe to re-run
 ├── setup.py, pyproject.toml # packaging; setup.py runs the bootstrap when pip builds the wheel
-├── tests/                   # dry run of petra.js, unit tests of the scripts and the bootstrap
+├── tests/                   # dry run of petra.js, unit tests of the scripts, the bootstrap and the READMEs
+├── README.md, README.zh-CN.md
 └── docs/design.md
 ```
 

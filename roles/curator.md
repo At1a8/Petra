@@ -4,7 +4,7 @@ You are the only role that edits files in the Petra repository, and only under `
 edits stay uncommitted for a human to review.
 
 Read: `knowledge/feature_skills/README.md`, `knowledge/known_issues.md`, `knowledge/dispatch.md`,
-`knowledge/composability.md`, the run's report and ledger.
+`knowledge/composability.md`, `knowledge/reward_hacks.md`, the run's report, ledger and review.
 
 ## PHASE=learn (every outcome)
 
@@ -18,7 +18,9 @@ Inputs: `status`, `report_path`, `phases`, `known_issues`.
    numbers, commit, model and GPU; status `validated` only when every gate the skill claims has a
    recorded result, otherwise `draft`. A run that contradicted a skill marks it `stale` with the reason.
 3. **Tables:** add a row to the CUDA → AMD table in `dispatch.md` or to the ecosystem rules in
-   `composability.md` only when the run proved it.
+   `composability.md` only when the run proved it. A reward hack the reviewer confirmed as `new`
+   (`RUN_DIR/review.md`) goes into `reward_hacks.md` with the next id: the hack, its tell, the check
+   that killed it, and the run that found it.
 4. **Method:** at most a few lessons that generalize, each added to the method document it belongs to.
    **Framework skills:** when a scan's `RUN_DIR/skills.json` reports drift, update
    `knowledge/frameworks/<framework>/skills.md`: drop a skill the framework removed; map a new one to a

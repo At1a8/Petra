@@ -7,7 +7,7 @@
 // GEAK_HOME defaults to ../geak/GEAK next to this checkout.
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 
 const PETRA = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GEAK_HOME = process.env.GEAK_HOME || path.resolve(PETRA, '..', 'geak', 'GEAK');
@@ -45,11 +45,11 @@ const DEFAULTS = {
   'architect:perf_plan': () => ({ work_packages: [WP('WP1')], handoffs: [{ id: 'O2', owner: 'kernel_workflow', spec_path: `${RUN}/op_spec.md` }], perf_claim: '-5% TPOT', gate_ok: true }),
   'implementer:implement': (ins) => ({ wp: ins.work_package.id, status: 'done', commit: `c_${ins.work_package.id}`, unit_test_cmd: 'pytest -q t.py', files_changed: ['x.py'], kernel_handoff: null }),
   'implementer:rollback': () => ({ wp: 'x', reset_to: 'base', clean: true }),
-  'test_engineer:unit': (ins) => ({ wp: ins.work_package.id, unit_pass: true, feature_off_unchanged: true, evidence: 'ok' }),
+  'test_engineer:unit': (ins) => ({ wp: ins.work_package.id, unit_pass: true, feature_off_unchanged: true, fails_without_change: 'parent', evidence: 'ok' }),
   'verify_engineer:verify': () => ({ all_pass: true, gates: { G0: 'pass', G2: 'pass' }, failures: [], ledger_path: `${RUN}/experiment_ledger.md` }),
   'investigator:investigate': () => ({ verdict: 'fix_needed', work_packages: [WP('FIX1')], summary: 'race in hook' }),
   'investigator:diagnose': () => ({ verdict: 'fix_needed', root_cause: 'stale import', work_packages: [WP('WP1')] }),
-  'perf_engineer:perf_eval': () => ({ claim_reproduced: true, guards_ok: true, workload_unchanged: true, path_ok: true, results: [], summary: '+22%' }),
+  'perf_engineer:perf_eval': () => ({ claim_reproduced: true, held_out_ok: true, guards_ok: true, workload_unchanged: true, path_ok: true, results: [], summary: '+22%' }),
   'perf_engineer:profile': () => ({ analysis_path: `${RUN}/perf_analysis.md`, path_ok: true, path_evidence: 'aiter attention, graphs on', metrics: { gpu_busy: 0.71 }, opportunities: [
     { id: 'O1', kind: 'host_sync', where: 'aiter_backend.py', evidence: 'trace', upper_bound_pct: 4, owner: 'petra' },
     { id: 'O2', kind: 'kernel', where: 'moe', evidence: 'trace', upper_bound_pct: 9, owner: 'kernel_workflow' }] }),
@@ -153,12 +153,33 @@ const scenarios = [
   ['feature: unit gate fails once, feedback reaches the second round', async () => {
     const r = await run({ mode: 'feature', task: 't' }, {
       'test_engineer:unit': (ins, n) => (n === 1
-        ? { wp: ins.work_package.id, unit_pass: false, feature_off_unchanged: true, failure_summary: 'case 7 mismatches the reference' }
-        : { wp: ins.work_package.id, unit_pass: true, feature_off_unchanged: true }),
+        ? { wp: ins.work_package.id, unit_pass: false, feature_off_unchanged: true, fails_without_change: 'parent', failure_summary: 'case 7 mismatches the reference' }
+        : { wp: ins.work_package.id, unit_pass: true, feature_off_unchanged: true, fails_without_change: 'parent' }),
     });
     check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
     const second = r.calls.filter((c) => c.key === 'implementer:implement')[1];
     check(second && second.ins.feedback === 'case 7 mismatches the reference', 'feedback passed to round 1');
+  }],
+  ['implement: a unit test that passes without the change is a failed round', async () => {
+    const r = await run({ mode: 'feature', task: 't' }, {
+      'test_engineer:unit': (ins, n) => ({ wp: ins.work_package.id, unit_pass: true, feature_off_unchanged: true,
+        fails_without_change: n === 1 ? 'no' : 'mutant', failure_summary: n === 1 ? 'passes on the parent: it never calls the new path' : '' }),
+    });
+    check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
+    const rounds = r.calls.filter((c) => c.key === 'implementer:implement');
+    check(rounds.length === 3 && rounds[1].ins.feedback.includes('does not fail without the change')
+      && rounds[1].ins.feedback.includes('never calls the new path'), `feedback: ${rounds[1] && rounds[1].ins.feedback}`);
+  }],
+  ['implement: only a docs package may have nothing to fail', async () => {
+    const asNa = (ins) => ({ wp: ins.work_package.id, unit_pass: true, feature_off_unchanged: true, fails_without_change: 'n/a' });
+    const docs = await run({ mode: 'feature', task: 't' }, {
+      'architect:design': () => ({ design_path: `${RUN}/design.md`, work_packages: [WP('D1', { kind: 'docs' })], gate_ok: true }),
+      'test_engineer:unit': asNa,
+    });
+    check(docs.result.status === 'ready_for_review', `docs: ${docs.result.status}`);
+    const code = await run({ mode: 'feature', task: 't', max_fix_rounds: 0 }, { 'test_engineer:unit': asNa });
+    check(code.result.status === 'blocked' && code.result.stopped_at === 'Implement', `framework with n/a: ${code.result.status}`);
+    check(code.keys.includes('implementer:rollback'), 'rolled back');
   }],
   ['feature: verify fails, investigation finds a fix, re-verify passes', async () => {
     const r = await run({ mode: 'feature', task: 't' }, {
@@ -208,7 +229,7 @@ const scenarios = [
   }],
   ['feature: a work package that never passes is rolled back', async () => {
     const r = await run({ mode: 'feature', task: 't', max_fix_rounds: 1 }, {
-      'test_engineer:unit': (ins) => ({ wp: ins.work_package.id, unit_pass: false, feature_off_unchanged: true, failure_summary: 'still wrong' }),
+      'test_engineer:unit': (ins) => ({ wp: ins.work_package.id, unit_pass: false, feature_off_unchanged: true, fails_without_change: 'parent', failure_summary: 'still wrong' }),
     });
     check(r.result.status === 'blocked' && r.result.stopped_at === 'Implement', `status ${r.result.status}`);
     check(r.keys.filter((k) => k === 'implementer:implement').length === 2, 'max_fix_rounds + 1 attempts');
@@ -242,7 +263,7 @@ const scenarios = [
   }],
   ['rollback: an unclean rollback goes on the attention list of the report', async () => {
     const r = await run({ mode: 'feature', task: 't', max_fix_rounds: 0 }, {
-      'test_engineer:unit': (ins) => ({ wp: ins.work_package.id, unit_pass: false, feature_off_unchanged: true, failure_summary: 'wrong' }),
+      'test_engineer:unit': (ins) => ({ wp: ins.work_package.id, unit_pass: false, feature_off_unchanged: true, fails_without_change: 'parent', failure_summary: 'wrong' }),
       'implementer:rollback': () => ({ wp: 'WP1', reset_to: 'base', clean: false }),
     });
     check(r.result.status === 'blocked' && r.result.attention.length === 1 && r.result.attention[0].wp === 'WP1',
@@ -250,7 +271,7 @@ const scenarios = [
     const rep = r.calls.find((c) => c.key === 'director:report');
     check(rep && Array.isArray(rep.ins.attention) && rep.ins.attention.length === 1, 'the report sees what a human must clean up');
     const clean = await run({ mode: 'feature', task: 't', max_fix_rounds: 0 }, {
-      'test_engineer:unit': (ins) => ({ wp: ins.work_package.id, unit_pass: false, feature_off_unchanged: true, failure_summary: 'wrong' }),
+      'test_engineer:unit': (ins) => ({ wp: ins.work_package.id, unit_pass: false, feature_off_unchanged: true, fails_without_change: 'parent', failure_summary: 'wrong' }),
     });
     check(clean.result.attention.length === 0, 'a clean rollback needs no attention');
   }],
@@ -338,11 +359,30 @@ const scenarios = [
   }],
   ['perf: no measured win drops the change', async () => {
     const r = await run({ mode: 'perf', task: 'DeepSeek-V4.1 decode on MI355X' }, {
-      'perf_engineer:perf_eval': () => ({ claim_reproduced: false, guards_ok: true, workload_unchanged: true, path_ok: true, summary: '-0.3% within noise' }),
+      'perf_engineer:perf_eval': () => ({ claim_reproduced: false, held_out_ok: true, guards_ok: true, workload_unchanged: true, path_ok: true, summary: '-0.3% within noise' }),
     });
     check(r.result.status === 'dropped' && r.result.stopped_at === 'Performance', `status ${r.result.status}`);
     check(r.keys.includes('implementer:rollback'), 'change rolled back');
     check(r.result.handoffs.some((h) => h.owner === 'kernel_workflow'), 'kernel opportunity handed off');
+  }],
+  ['perf: a gain that vanishes at the held-out operating point is dropped', async () => {
+    const r = await run({ mode: 'perf', task: 'p' }, {
+      'perf_engineer:perf_eval': () => ({ claim_reproduced: true, held_out_ok: false, guards_ok: true, workload_unchanged: true, path_ok: true,
+        summary: '+9% at c64, -0.2% at the held-out c32 / seed 2' }),
+    });
+    check(r.result.status === 'dropped' && r.result.stopped_at === 'Performance', `status ${r.result.status}`);
+    check(r.keys.includes('implementer:rollback'), 'the fitted change is rolled back');
+    check(r.result.phases.some((p) => p.phase === 'Performance' && p.summary.includes('held-out')), 'the report says why');
+    const feature = await run({ mode: 'feature', task: 't' }, {
+      'perf_engineer:perf_eval': () => ({ claim_reproduced: true, held_out_ok: false, guards_ok: true, workload_unchanged: true, path_ok: true }),
+    });
+    check(feature.result.status === 'blocked' && feature.result.stopped_at === 'Performance', `feature: ${feature.result.status}`);
+    const noClaim = await run({ mode: 'feature', task: 't' }, {
+      'director:spec': () => ({ spec_path: `${RUN}/feature_spec.md`, gates_measurable: true, perf_claim: '' }),
+      'perf_engineer:perf_eval': () => ({ claim_reproduced: true, held_out_ok: false, guards_ok: true, workload_unchanged: true, path_ok: true }),
+    });
+    check(noClaim.result.status === 'ready_for_review' && noClaim.keys.includes('perf_engineer:perf_eval'),
+      `no claim, only guards: ${noClaim.result.status}`);
   }],
   ['perf: measured win to a PR', async () => {
     const r = await run({ mode: 'perf', task: 'p', apply_prs: ['#46329'] });
@@ -418,7 +458,8 @@ const scenarios = [
   ['review: requested changes are implemented, verified, measured and reviewed again', async () => {
     const r = await run({ mode: 'feature', task: 't' }, {
       'reviewer:review': (ins, n) => (n === 1
-        ? { verdict: 'changes_requested', findings: [{ severity: 'major', where: 'x.py:9', issue: 'breaks TP=8 with DP attention' }],
+        ? { verdict: 'changes_requested', findings: [{ severity: 'major', where: 'x.py:9', issue: 'breaks TP=8 with DP attention' },
+          { severity: 'blocker', where: 'x.py:40', issue: 'fast path only for batch 64', hack: 'P7' }],
           work_packages: [WP('R1')], review_path: `${RUN}/review.md` }
         : { verdict: 'approve', findings: [], review_path: `${RUN}/review.md` }),
     });
@@ -468,7 +509,7 @@ const scenarios = [
   }],
   ['perf: a measurement off the fixed workload is not evidence and drops nothing', async () => {
     const r = await run({ mode: 'perf', task: 'p' }, {
-      'perf_engineer:perf_eval': () => ({ claim_reproduced: false, guards_ok: true, workload_unchanged: false, path_ok: true, summary: 'c64 dropped' }),
+      'perf_engineer:perf_eval': () => ({ claim_reproduced: false, held_out_ok: true, guards_ok: true, workload_unchanged: false, path_ok: true, summary: 'c64 dropped' }),
     });
     check(r.result.status === 'blocked' && r.result.stopped_at === 'Performance', `status ${r.result.status}`);
     check(!r.keys.includes('implementer:rollback'), 'an untrusted measurement rolls nothing back');
@@ -483,6 +524,15 @@ const scenarios = [
       check(doc.includes(`## PHASE=${ph}`), `roles/${role}.md documents PHASE=${ph}`);
       check(DEFAULTS[`${role}:${ph}`] !== undefined, `dry run scripts an answer for ${role}:${ph}`);
     }
+  }],
+  ['roles: every knowledge file, template and script a role names exists', async () => {
+    const refs = new Set();
+    for (const f of readdirSync(path.join(PETRA, 'roles'))) {
+      const text = readFileSync(path.join(PETRA, 'roles', f), 'utf8');
+      for (const m of text.matchAll(/`((?:knowledge|templates|scripts)\/[A-Za-z0-9_./-]+\.(?:md|py|sh))`/g)) refs.add(m[1]);
+    }
+    check(refs.size >= 20, `found ${refs.size} references`);
+    for (const ref of refs) check(existsSync(path.join(PETRA, ref)), `${ref} exists`);
   }],
   ['skills: every role in the framework-skills index reads it', async () => {
     const index = readFileSync(path.join(PETRA, 'knowledge', 'frameworks', 'sglang', 'skills.md'), 'utf8');

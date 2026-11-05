@@ -37,6 +37,13 @@ outputs never triggered it.
   every arm — attention, MoE and GEMM backends, graph capture, torch.compile, quantization, and any
   fallback or "disabling" warning in the log. A run that silently left the intended path measures a
   different system; it is not evidence for or against the change.
+- **Hold out an operating point before claiming a win.** A gain counts only if it also holds where
+  nobody tuned: the same workload with another seed (or another slice of a trace), at half the
+  concurrency (at least 1). It is fixed with the workload at Setup and measured like the claim; the
+  change must still win beyond the noise band there, if not by as much. A gain that vanishes is fitted
+  to the benchmark (`reward_hacks.md` P7), not evidence.
+- Check the measurement entries of [`reward_hacks.md`](reward_hacks.md) (P) on both arms before
+  reporting any number.
 - Fresh server per configuration; same container, commit family, GPU set and launch flags apart from
   the feature switch and the budget.
 - Flush the prefix cache between runs; use random-token or seed-fixed distinct prompts so prefix hits do

@@ -40,7 +40,9 @@ that passes), `resume_run_dir`.
      record the spread (`validation_doctrine.md`). The baseline passes when repeat runs agree within the
      recorded spread.
    - `perf`: `workload` is the task's fixed benchmark. Record it in `RUN_DIR/run.json` as given; every
-     later measurement uses it unchanged, and the baseline runs exactly it.
+     later measurement uses it unchanged, and the baseline runs exactly it. Record its held-out
+     operating point next to it (`perf_evaluation.md` §3: another seed or trace slice, half the
+     concurrency), before any number is seen.
    - `issue`, `ci`: prepare the environment the reproduction needs; run a baseline only if the task
      needs one now. Report `baseline_status: "skip"` with the reason otherwise.
 5. **Artifact:** the environment and baseline sections of `RUN_DIR/experiment_ledger.md`
@@ -65,7 +67,8 @@ Return:
    acceptance criteria per gate with a named suite and a threshold relative to the same-pattern
    baseline, non-goals, unsupported combinations (each with a startup rejection), constraints, time-box.
 4. `perf_claim`: the measurable performance benefit the feature promises (workload, budget, metric,
-   size), or empty when it claims none; guard workloads are always run.
+   size), or empty when it claims none; guard workloads are always run. A claim also names its held-out
+   operating point (`perf_evaluation.md` §3), fixed here with the workload.
 
 Return:
 

@@ -10,6 +10,7 @@
 | framework commit / image | |
 | launch flags | |
 | workload | fixed at Setup (`RUN_DIR/run.json`): ISL / OSL / concurrency / dataset or trace |
+| held-out operating point | fixed at Setup with the workload: another seed or trace slice, half the concurrency (`perf_evaluation.md` §3) |
 | trace tool and window | torch profiler / rocprofv3, which steps (steady state: warm-up passes excluded) |
 
 ## Path check (before any number is trusted)
@@ -75,6 +76,6 @@ Layer table — per forward pass and layer type:
 
 ## Result
 
-| Opportunity | Correctness gates | A/B (equal budget) | Kept / dropped | Artifact |
-|---|---|---|---|---|
-| | | | | |
+| Opportunity | Correctness gates | A/B (equal budget) | Held-out point | Kept / dropped | Artifact |
+|---|---|---|---|---|---|
+| | | | | | |

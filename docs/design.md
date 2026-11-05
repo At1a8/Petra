@@ -120,9 +120,15 @@ current upstream main and put first on `PYTHONPATH`, never the copy of sglang in
 - Gates G0–G5 (`validation_doctrine.md`), plus mode gates (`issue_repro`, `failing_test`) and the
   composability gates of every dimension a task touches.
 - Performance evidence counts only on the workload fixed before any profile is read and on the
-  serving path the task targets (`perf_evaluation.md` §3); `mode=perf` requires the workload.
+  serving path the task targets, and a gain only if it also holds at a held-out operating point fixed
+  with the workload (`perf_evaluation.md` §3); `mode=perf` requires the workload.
 - An independent review closes every code change before the PR; its requested changes are work
   packages, bounded by `max_review_rounds`.
+- Reward hacks — changes that move a number while breaking what it meant — are hunted from a catalog
+  (`reward_hacks.md`, each entry with how to spot it and the check that kills it): the reviewer and the
+  performance engineer start from it, a confirmed hack comes back as a work package whose test kills
+  it, the curator adds new ones, and every unit test must fail without its change (parent commit or a
+  broken copy). Adapted from SkyDiscover-Synthesize's auditor and mutation-checked tests.
 - A failed verification goes to the investigator: a fix becomes new work packages; a failure the
   same-pattern baseline shares becomes a known issue and the gate is re-judged on the rest.
 - Budgets: fix rounds per work package, investigation rounds, work packages per task, agent retries.

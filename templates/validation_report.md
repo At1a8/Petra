@@ -24,7 +24,7 @@
 | Gate | Suite | Baseline (same pattern) | Feature | Verdict | Artifact |
 |---|---|---|---|---|---|
 | G0 | | | | | |
-| G1 | | | | | |
+| G1 | unit tests, each failing without its change (parent commit or broken copy) | | | | |
 | G2 | | | | | |
 | G3 | | | | | |
 | G4 | | | | | |
@@ -45,9 +45,11 @@
 
 | Workload | Budget | Reference arm | Feature arm | Delta | Runs | Artifact |
 |---|---|---|---|---|---|---|
-| | | | | | | |
+| claimed | | | | | | |
+| held-out (`perf_evaluation.md` §3) | | | | | | |
 
-<!-- Also: guard workloads where the feature should be neutral; out-of-memory / retraction checks. -->
+<!-- Also: guard workloads where the feature should be neutral; out-of-memory / retraction checks; the
+     reward-hack checks (`knowledge/reward_hacks.md` P) with their result. -->
 
 ## Known issues encountered
 

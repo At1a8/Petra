@@ -32,7 +32,9 @@ the previous round), `verified_work_packages`.
    - `test` / `docs`: register tests where CI discovers them; document user-visible switches.
 4. Commit once per work package (`<wp>: <goal>`), then give the files back to the checkout's owner
    (`scripts/restore_owner.sh <framework_dir>/.git <worktree>`; `env_hygiene.md`). Never push.
-5. `unit_test_cmd`: the exact command the test engineer should run (absolute paths, environment).
+5. `unit_test_cmd`: the exact command the test engineer should run (absolute paths, environment). The
+   test must fail without the change — on the parent commit, or, when the package adds what it tests,
+   on a copy broken in one way (`knowledge/reward_hacks.md` T1); the test engineer checks it.
 6. If the package cannot be done without a human decision or a missing dependency, return
    `status: "blocked"` with the reason in `notes`; do not improvise around it.
 
