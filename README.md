@@ -55,7 +55,9 @@ Verify ([`knowledge/kernel_backends.md`](knowledge/kernel_backends.md)):
 | `command` | any other CLI given as `kernel_backend_command` |
 
 A gain comes back as a work package: the implementer integrates it and Petra's own gates judge it. A
-back end that fails or finds nothing never blocks the task.
+back end that fails or finds nothing never blocks the task. An integrated kernel that then fails
+Verify goes back to the functional kernel and is handed to the back end once more, with the failing
+case added to its tests; it is integrated again only if it passes.
 
 ## Roles
 
@@ -80,14 +82,14 @@ the roles:
 | `architect` | Design, Plan | turns the recon or the profile into work packages that can each be tested alone, with invariants, memory budget, synchronization, startup rejections and a test plan; flags designs a human must review; assigns each performance opportunity to Petra, the kernel back end or Hyperloom |
 | `issue_triager` | Triage, Reproduce | sets the priority and the action from the issue, its comments and linked PRs; drafts the reply; writes the reproduction that becomes the issue's gate |
 | `ci_guardian` | Classify, Bisect | classifies a red job (code regression, dependency bump, test bug, flaky, infrastructure) and hands the last two over; finds and confirms the culprit commit and plans the fix |
-| `implementer` | Implement | one work package at a time, smallest diff, neutral with the feature off, HIP-only or behind a switch; functional kernels with unit tests (tuning is a hand-off); applies existing PRs and verified kernel gains; rolls back a failed package |
-| `test_engineer` | Implement | re-runs each package's unit test on its commit, checks that the test fails without the change (on the parent commit or a broken copy) and that behaviour with the feature off is unchanged |
+| `implementer` | Implement | one work package at a time, smallest diff, neutral with the feature off, HIP-only or behind a switch, committed lint-clean with its tests registered; functional kernels with unit tests (tuning is a hand-off); applies existing PRs and verified kernel gains; rolls back a failed package |
+| `test_engineer` | Implement | re-runs each package's unit test on its commit, checks that the test can fail (on the parent commit when the change alters behaviour, on a broken copy when it keeps it) and that behaviour with the feature off is unchanged |
 | `verify_engineer` | Verify | runs the correctness gates (G0, G2–G4, composability, the mode's gate) on fresh servers against a same-pattern baseline, classifying and counting every failure |
 | `investigator` | Investigate, Diagnose | runs the controls first, then one-mechanism-at-a-time experiments with a hypothesis ledger; returns fix work packages, a known issue the baseline shares, an inconclusive verdict, or (for an issue) a root cause outside the AMD side; probes only behind switches |
 | `perf_engineer` | Profile, Performance | checks the run took the intended path, turns a steady-state trace into fixed tables (kernels, overlap, fuse patterns, layers), metrics and opportunities with upper bounds; evaluates changes at equal budget on the fixed workload, against noise, guard workloads and a held-out operating point, checking the known measurement hacks |
 | `reviewer` | Review | reads the diff and its evidence as a maintainer would, starting from the catalog of known reward hacks: shapes, dtypes, parallel layouts, graphs, fallbacks, do-no-harm, the framework's conventions, a fair benchmark; requested changes, and a test for every confirmed hack, come back as work packages; can run on another model (`review_model`) |
 | `kernel_liaison` | Kernel | turns a kernel hand-off into the back end's task, runs `command` back ends, judges the result on the back end's own verification and returns a gain as a work package |
-| `pr_engineer` | PR | hygiene, lint, CI registration, one commit per work package, a trial merge of main, feature off on the final commit, the PR body and the push command |
+| `pr_engineer` | PR | changes no code: checks hygiene, lint and CI registration (gaps go back as work packages), arranges one commit per work package without changing the tree, trial-merges main to report conflicts, checks feature off on the final commit, writes the PR body and the push command |
 | `curator` | Report | writes what the run proved into `knowledge/` (known issues, feature skills, CUDA → AMD rows, new reward hacks, method lessons), every number traceable to the run |
 
 ## Setup
@@ -139,7 +141,9 @@ tmux new -s petra                # a run takes hours; tmux keeps it through a dr
 
 [`scripts/run_docker.sh`](scripts/run_docker.sh) is the usual ROCm `run_docker.sh`: a privileged
 container with the GPUs, `/home` and the data directories that exist (`/data`, `/mnt`, ...) mounted at
-the same paths, and a root shell in it.
+the same paths, and a root shell in it. Unlike many such scripts it does not mount the host's Docker
+socket (`DOCKER_SOCKET=1` does): Petra's agents run as root with permissions auto-approved, and the
+socket would put every container on the host within their reach.
 
 - **Image.** Tasks test the newest sglang, so it starts from the newest daily `rocm/sgl-dev` build for
   ROCm 10 and MI35x ([`scripts/latest_image.py`](scripts/latest_image.py), e.g.
@@ -226,7 +230,7 @@ Claude Code runs `petra.js` again with the same arguments plus `answers={"worklo
 
 ### 5. After a run (host)
 
-Every run leaves its report in its run directory under `/home/<you>/Petra/exp/` (`validation_report.md`
+A run that got past Setup leaves its report in its run directory under `/home/<you>/Petra/exp/` (`validation_report.md`
 when a PR is ready, `report.md` for any other outcome; the result names it as `report_path`), next to
 the task's worktree and branch, and what root wrote there is yours again. Petra never pushes: the
 report lists the PR body and the exact `git -C <worktree> push ...`. Run it on the host, where your git
@@ -245,6 +249,8 @@ step 3 the GEAK way (pip shows the output only with `-v`; a cached wheel skips i
 |---|---|---|
 | `IMAGE` | `scripts/run_docker.sh` | the newest daily `rocm/sgl-dev` image of `IMAGE_VARIANT` (the newest local one when Docker Hub cannot be reached) |
 | `IMAGE_VARIANT`, `NAME`, `EXTRA_MOUNTS` | `scripts/run_docker.sh` | `rocm10-mi35x`; your user name; more directories to mount, space-separated |
+| `DOCKER_SOCKET` | `scripts/run_docker.sh` | unset; `1` also mounts the host's Docker socket and `docker` |
+| `PETRA_LOCK_FILE` | `scripts/run_lock.py` | `/dev/shm/petra-run.lock`, the machine's one-task lock |
 | `PETRA_HOME` | bootstrap | `./Petra`, or the checkout you run from |
 | `PETRA_REPO_URL`, `PETRA_REF` | bootstrap | `https://github.com/At1a8/Petra.git`, its default branch |
 | `CLAUDE_VERSION`, `CLAUDE_BIN_DIR` | bootstrap | `latest`, `~/.local/bin` |
@@ -275,7 +281,7 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `goal` | what done means, measurable when the mode measures; the spec and the performance plan address it |
 | `framework_dir` | the framework checkout; Petra works in a worktree of it (required except `scan`) |
 | `model_path` | the model the baseline and the gates run (required for `feature` and `perf`) |
-| `framework`, `platform`, `gpu_ids` | target and environment (`sglang`; empty `gpu_ids` lets Setup pick free GPUs) |
+| `framework`, `platform`, `gpu_ids` | target and environment (`sglang`; empty `gpu_ids` lets Setup pick idle GPUs, which every later role then uses through `HIP_VISIBLE_DEVICES`) |
 | `workload` | the benchmark every measurement uses, e.g. `{"isl":8192,"osl":1024,"conc":64}`; required for `perf`, fixed at Setup |
 | `container` | only when Petra runs on the host: the framework's container, reached with `docker exec` |
 | `exp_root` | where run directories go (default `<petra_dir>/exp`) |
@@ -285,10 +291,11 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `kernel_budget` | optimization rounds for the kernel back end (default 6) |
 | `apply_prs` | `perf`: candidate PRs to apply and A/B |
 | `sources`, `since` | `scan`: any of `upstream`, `issues`, `ci`, `hardware`, `perf`; the start of the window |
-| `stop_after` | stop after the named phase (e.g. `Design`) |
+| `stop_after` | stop after the named phase of the mode (e.g. `Design`, `Reproduce`); a phase the mode does not run comes back as a question |
 | `resume_from`, `run_dir` | `feature`: `implement` continues a run that stopped at Design once a human approved `design.md` |
 | `review_model` | the reviewer's model, passed with its agent call (GEAK's runtime takes a model per call; elsewhere it depends on the runtime) |
-| `max_fix_rounds`, `max_investigate_rounds`, `max_review_rounds`, `max_work_packages`, `agent_retries`, `agent_timeout_ms` | budgets |
+| `max_fix_rounds`, `max_investigate_rounds`, `max_review_rounds`, `max_work_packages` | budgets |
+| `agent_retries`, `agent_timeout_ms` | an agent call is retried after an error (the retry checks what the failed attempt left), never after a timeout: the timed-out agent may still be running, so it goes on the report's attention list. Default timeout 3 h, 6 h for the verify and performance engineers and the investigator |
 
 Everything but `petra_dir`, `request`, `answers`, `exp_root`, `review_model` and the budgets is the task
 definition; the result of every run that started records the definition it used (`task_def`), where
@@ -297,7 +304,21 @@ each field came from (`provenance`) and the intake's `assumptions`.
 Human checkpoints: questions from the Intake (`needs_input`); any `stop_after`; L3 tasks and designs
 the architect flags stop at Design (`awaiting_design_review`); a review the reviewer marks `blocked`
 stops before the PR; the PR engineer returns the exact `git push` instead of pushing; issue replies
-are drafts in the run directory. Every run ends with a report, whatever its status.
+are drafts in the run directory. A run that has its run directory ends with a report, whatever its
+status; one that ends at the Intake (questions, a rejection) or before Setup created its directory
+(`busy`) returns only its result.
+
+**One task per machine.** A run takes the machine before it creates anything — a lock in `/dev/shm`,
+which every container started with `--ipc=host` shares with the host and no other machine sees — and
+frees it at the end of its report. While another task holds it, a new run ends at once as `busy` and
+names the holder. A lock whose run finished, or wrote nothing in its run directory for twice its
+longest agent call (12 h by default), is taken over by the next run; one left by a run that died is
+freed at once:
+
+```bash
+python3 scripts/run_lock.py status            # who holds this machine
+python3 scripts/run_lock.py release --force   # free it after that run died
+```
 
 The framework's own skills (sglang's `.agents/skills/`) are referenced in place, never copied: each
 role reads the ones [`knowledge/frameworks/sglang/skills.md`](knowledge/frameworks/sglang/skills.md)
@@ -322,7 +343,8 @@ checkout it lives in; every agent runs it after a git write ([`knowledge/env_hyg
 `scripts/check_framework_skills.py --framework-dir <dir>` checks the skills index against a framework
 checkout: skills it names that are gone, and new ones it does not name yet (the scout runs it on every
 scan). `scripts/latest_image.py [--variant rocm10-mi30x]` prints the newest daily sglang image
-(`run_docker.sh` starts from it; the director compares a run's image with it).
+(`run_docker.sh` starts from it; the director compares a run's image with it). `scripts/run_lock.py`
+keeps one Petra task per machine (`acquire`, `release`, `status`).
 
 ## Tests
 
@@ -350,7 +372,8 @@ Petra/
 │   └── feature_skills/      # validated plans per feature (hisparse-v2 first)
 ├── templates/               # task_definition, feature_spec, design, experiment_ledger, validation_report,
 │                            # pr_body, issue_triage, ci_triage, perf_analysis, task_queue
-├── scripts/                 # task collection, audits, run_docker.sh, latest_image.py, restore_owner.sh
+├── scripts/                 # task collection, audits, run_docker.sh, latest_image.py, run_lock.py,
+│                            # restore_owner.sh
 ├── petra/bootstrap.py       # setup step 3, in the container; safe to re-run
 ├── setup.py, pyproject.toml # packaging; setup.py runs the bootstrap when pip builds the wheel
 ├── tests/                   # dry run of petra.js, unit tests of the scripts, the bootstrap and the READMEs

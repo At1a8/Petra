@@ -48,9 +48,13 @@ Inputs: the triage record, `expect_fixed` (true when the triage concluded the fi
 5. "Not reproduced" is a result: state the environment, the duration and the counts.
 6. `repro_cmd` is always the command you ran; when `reproduced` is true it must not be empty, or the
    task stops here.
+7. A `performance` issue: `perf_claim` is the number the fix must restore — metric, workload and value,
+   from the reporter's expectation or the last good commit you measured (e.g. "decode tok/s back to
+   2400 at c32, as on v0.5.21"). Without one the task stops here: a fix cannot be judged against it.
 
 Return:
 
 ```json
-{"reproduced": true, "repro_cmd": "bash /abs/RUN_DIR/repro.sh", "evidence": "<counts, logs, environment>"}
+{"reproduced": true, "repro_cmd": "bash /abs/RUN_DIR/repro.sh", "perf_claim": "<performance issues only>",
+ "evidence": "<counts, logs, environment>"}
 ```

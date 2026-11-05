@@ -10,7 +10,7 @@ failure kind beyond the measured noise?".
 | Gate | What it shows | Typical suite |
 |---|---|---|
 | G0 feature off | the change is inert when disabled | baseline suites on the feature branch with the switch off |
-| G1 unit / oracle | each new kernel or data structure does what it claims | standalone tests vs a reference implementation, each failing without the change: on the parent commit, or on a copy broken in one way (`reward_hacks.md` T1) |
+| G1 unit / oracle | each new kernel or data structure does what it claims | standalone tests vs a reference implementation, each able to fail: on the parent commit when the change alters behaviour, on a copy of the change broken in one way when it keeps behaviour (`reward_hacks.md` T1) |
 | G2 accuracy | short-context quality is unchanged | GSM8K (5-shot, greedy, full set or ≥200 sampled) |
 | G3 long context | the feature's own data path is exercised and correct | needle-in-a-haystack: single and multi-needle |
 | G4 stability | no crash / hang / collapse under capacity pressure | many long prompts at high concurrency |

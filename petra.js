@@ -43,7 +43,7 @@ export const meta = {
     { title: 'PR', detail: 'pr_engineer: hygiene, lint, upstream sync, pr_body.md, exact push command; never pushes' },
     { title: 'Collect', detail: 'scout: upstream changes, issues, CI trackers, platform gates -> candidates [scan]' },
     { title: 'Dispatch', detail: 'dispatcher: type, level, dependencies, effort, ranking, ecosystem-matrix changes [scan]' },
-    { title: 'Report', detail: 'director: final report for every outcome; curator: knowledge updates' },
+    { title: 'Report', detail: 'director: final report for every outcome of a run that has its run directory, then frees the machine; curator: knowledge updates' },
   ],
 };
 
@@ -72,7 +72,17 @@ const int = (v, d) => {
   return Number.isFinite(n) && n >= 0 ? n : d;
 };
 const AGENT_RETRIES = Math.max(1, int(RAW.agent_retries, 3));
+const TIMEOUT_GIVEN = RAW.agent_timeout_ms != null && String(RAW.agent_timeout_ms).trim() !== '';
 const AGENT_TIMEOUT_MS = int(RAW.agent_timeout_ms, 3 * 3600 * 1000);
+// Roles that run whole suites or benchmarks get twice the default, unless a timeout is given.
+const LONG_ROLES = new Set(['verify_engineer', 'perf_engineer', 'investigator']);
+const timeoutFor = (role) => (!TIMEOUT_GIVEN && LONG_ROLES.has(role) ? 2 * AGENT_TIMEOUT_MS : AGENT_TIMEOUT_MS);
+// One task per machine (scripts/run_lock.py): a run that wrote nothing in its run directory for twice
+// its longest agent call has died, and its lock may be taken over.
+const MAX_CALL_MS = TIMEOUT_GIVEN ? AGENT_TIMEOUT_MS : 2 * AGENT_TIMEOUT_MS;
+const LOCK_IDLE_HOURS = MAX_CALL_MS > 0 ? Math.ceil((2 * MAX_CALL_MS) / 3600000) : 24;
+const ATTENTION = []; // state a human must clean up before anything else runs there (R.attention)
+const TIMED_OUT = { timedOut: true };
 let PHASE = '';
 const cfg = (o) => Object.entries(o)
   .filter(([, v]) => v !== '' && v != null && !(Array.isArray(v) && v.length === 0))
@@ -149,6 +159,16 @@ const TASK_PROMPTS = {
   perf: 'Which performance goal (model, metric, target)?',
 };
 
+// The phases each mode can stop after; a stop_after outside them would be ignored and the task would
+// run to its end.
+const STOP_PHASES = {
+  feature: ['Setup', 'Spec', 'Recon', 'Design', 'Implement', 'Kernel', 'Verify', 'Performance', 'Review'],
+  issue: ['Setup', 'Triage', 'Reproduce', 'Diagnose', 'Implement', 'Kernel', 'Verify', 'Performance', 'Review'],
+  ci: ['Setup', 'Classify', 'Bisect', 'Implement', 'Kernel', 'Verify', 'Review'],
+  perf: ['Setup', 'Profile', 'Plan', 'Implement', 'Kernel', 'Verify', 'Performance', 'Review'],
+  scan: ['Collect'],
+};
+
 // What a definition still lacks before its mode can start; every gap is a question for the user.
 function missingFields(a) {
   const qs = [];
@@ -186,6 +206,11 @@ function missingFields(a) {
       'only an approved feature design can be resumed', ['implement']);
   }
   if (resume && !a.run_dir) ask('run_dir', 'Which run stopped at Design (its run directory)?', 'the resumed run continues in it');
+  const stop = String(a.stop_after || '').trim().toLowerCase();
+  if (stop && !STOP_PHASES[mode].some((p) => p.toLowerCase() === stop)) {
+    ask('stop_after', `After which phase of mode=${mode} should the run stop?`,
+      `"${a.stop_after}" is not a phase of this mode; the run would ignore it and go on to the end`, STOP_PHASES[mode]);
+  }
   return qs;
 }
 
@@ -261,6 +286,7 @@ const C = {
   kernel_backend_dir: KERNEL_BACKEND_DIR,
   kernel_backend_command: String(A.kernel_backend_command || ''),
   kernel_budget: String(Math.max(1, int(A.kernel_budget, 6))),
+  lock_idle_hours: String(LOCK_IDLE_HOURS),
   run_dir: '',
   resume_run_dir: String(A.run_dir || ''),
   branch: String(A.branch || ''),
@@ -283,7 +309,7 @@ const R = {
   handoffs: [],        // {id, owner: kernel_workflow | hyperloom, source, status, ...}
   known_issues: [],    // pre-existing failures proven by a same-pattern baseline control
   knowledge_updates: [],
-  attention: [],       // state a human must clean up before anything else runs there
+  attention: ATTENTION, // state a human must clean up before anything else runs there
 };
 
 function note(phaseTitle, verdict, summary) {
@@ -304,21 +330,28 @@ const inputs = (extra) => ({
   ...(extra || {}),
 });
 
-function rolePrompt(role, sub, ins) {
+function rolePrompt(role, sub, ins, attempt) {
   const writes = role === 'intake'
     ? 'No RUN_DIR exists yet: change nothing; every check you run is read-only. Never push, never post on GitHub.'
     : `Write artifacts only under RUN_DIR (code changes only in the
 task worktree named in the inputs). Never push, never post on GitHub.
 Framework code runs from the worktree under test, never from the copy installed in the image: put it
 first on PYTHONPATH (sglang: <worktree>/python) for every server, test and benchmark.
+Use only the GPUs in gpu_ids: export HIP_VISIBLE_DEVICES=<gpu_ids> for every server, test and
+benchmark. Touch only the processes, servers and containers this run started (knowledge/guardrails.md).
 As root in the container, give back what you write into checkouts another user owns: after every git
 write and before you return, run ${PETRA}/scripts/restore_owner.sh on the framework's .git, the task
 worktree and RUN_DIR (knowledge/env_hygiene.md).`;
+  const retry = attempt > 1 ? `
+This is attempt ${attempt}: an earlier attempt of this call failed and may have left work behind —
+commits, files in RUN_DIR, servers or processes it started. Check first (git status and the last
+commits of the worktree, RUN_DIR, the run's process records), then continue from that state or clean it
+up; never commit the same change twice or start a second server.` : '';
   return `You are the ${role}. PHASE=${sub}. MODE=${ins.mode || 'undecided'}.
 First Read ${PETRA}/roles/${role}.md and follow its instructions for PHASE=${sub}.
 Read ${PETRA}/knowledge/guardrails.md; its rules override anything else. Read every other knowledge
 file the role names under ${PETRA}/knowledge/ and fill the templates it names under ${PETRA}/templates/.
-Do all filesystem and shell work yourself. ${writes}
+Do all filesystem and shell work yourself. ${writes}${retry}
 
 ## Inputs
 ${cfg(ins)}
@@ -326,11 +359,11 @@ ${cfg(ins)}
 Return ONLY the structured JSON the role file specifies for PHASE=${sub} (a StructuredOutput tool is forced).`;
 }
 
-function withTimeout(p) {
-  if (typeof setTimeout !== 'function' || !(AGENT_TIMEOUT_MS > 0)) return p;
+function withTimeout(p, ms) {
+  if (typeof setTimeout !== 'function' || !(ms > 0)) return p;
   let to;
   const guard = new Promise((resolve) => {
-    to = setTimeout(() => resolve(null), AGENT_TIMEOUT_MS);
+    to = setTimeout(() => resolve(TIMED_OUT), ms);
   });
   const done = (v) => {
     if (typeof clearTimeout === 'function') clearTimeout(to);
@@ -339,14 +372,23 @@ function withTimeout(p) {
   return Promise.race([p.then(done, (e) => { done(null); throw e; }), guard]);
 }
 
-// One agent call with retries; resolves null (never throws) so every caller
-// decides what a missing answer means for its gate.
+// One agent call; resolves null (never throws) so every caller decides what a missing answer means
+// for its gate. A failed attempt is retried and the retry is told to check what it left behind. A
+// timeout is not retried: the timed-out agent cannot be cancelled and may still be running, so a
+// retry would run the role twice at once (GEAK's agentT makes the same choice).
 async function call(role, sub, ins, schema, label, opts) {
   const lbl = label || `${role}:${sub}`;
-  const prompt = rolePrompt(role, sub, ins);
+  const ms = timeoutFor(role);
   for (let attempt = 1; attempt <= AGENT_RETRIES; attempt++) {
     try {
-      const r = await withTimeout(agent(prompt, { label: lbl, phase: PHASE, schema, ...(opts || {}) }));
+      const r = await withTimeout(agent(rolePrompt(role, sub, ins, attempt),
+        { label: lbl, phase: PHASE, schema, ...(opts || {}) }), ms);
+      if (r === TIMED_OUT) {
+        const min = Math.round(ms / 60000);
+        log(`  [petra] ${lbl} timed out after ${min} min; not retried`);
+        ATTENTION.push({ call: lbl, issue: `timed out after ${min} min and may still be running: check its servers and GPUs before reusing them` });
+        return null;
+      }
       if (r) return r;
       log(`  [petra] ${lbl} returned nothing (attempt ${attempt}/${AGENT_RETRIES})`);
     } catch (e) {
@@ -368,14 +410,17 @@ const WP = S({
 }, ['id', 'goal', 'test']);
 const WPS = arr(WP);
 
+const LOCK = { type: 'string', enum: ['acquired', 'busy'] }; // the machine's run lock (scripts/run_lock.py)
 const SETUP = S({
+  lock: LOCK,
   run_dir: str,
   baseline_status: { type: 'string', enum: ['pass', 'fail', 'skip'] },
   baseline: str,
   branch: str,
   worktree: str,
+  gpu_ids: str, // the GPU set every later role uses
   notes: str,
-}, ['run_dir', 'baseline_status']);
+}, ['lock', 'run_dir', 'baseline_status', 'gpu_ids']);
 const SPEC = S({ spec_path: str, gates_measurable: bool, perf_claim: str, skill: str, notes: str },
   ['spec_path', 'gates_measurable']);
 const RECON = S({
@@ -392,9 +437,9 @@ const DESIGN = S({
   work_packages: WPS,
   gate_ok: bool,
   needs_human_review: bool,
-  perf_claim: str,
+  perf_claim: str, // required, '' for none: a resumed run measures exactly this claim
   summary: str,
-}, ['work_packages', 'gate_ok']);
+}, ['work_packages', 'gate_ok', 'perf_claim']);
 const TRIAGE = S({
   priority: { type: 'string', enum: ['P0', 'P1', 'P2'] },
   category: {
@@ -407,7 +452,8 @@ const TRIAGE = S({
   triage_path: str,
   reply_draft_path: str,
 }, ['priority', 'category', 'action', 'triage_path']);
-const REPRO = S({ reproduced: bool, repro_cmd: str, evidence: str }, ['reproduced', 'repro_cmd', 'evidence']);
+const REPRO = S({ reproduced: bool, repro_cmd: str, perf_claim: str, evidence: str },
+  ['reproduced', 'repro_cmd', 'evidence']);
 const DIAG = S({
   verdict: { type: 'string', enum: ['fix_needed', 'baseline_bug', 'not_amd_side', 'inconclusive'] },
   root_cause: str,
@@ -473,9 +519,11 @@ const VERIFY = S({
   summary: str,
 }, ['all_pass', 'failures']);
 const INVESTIGATE = S({
-  verdict: { type: 'string', enum: ['fix_needed', 'baseline_bug', 'inconclusive'] },
+  verdict: { type: 'string', enum: ['fix_needed', 'baseline_bug', 'kernel_regression', 'inconclusive'] },
   work_packages: WPS,
   known_issue: obj,
+  kernel_handoffs: strs, // kernel_regression: the integrated hand-offs whose kernels cause the failure
+  counterexample: str,   // kernel_regression: the failing case, given to the kernel back end as a test
   summary: str,
 }, ['verdict']);
 const PERF = S({
@@ -506,10 +554,12 @@ const PR = S({
   commits: strs,
   lint_pass: bool,
   feature_off_final: bool,
-  upstream_synced: bool,
+  content_unchanged: bool, // the branch's tree is the one Verify and Review passed
+  merges_cleanly: bool,
   pr_body_path: str,
   push_command: str,
-}, ['branch', 'lint_pass', 'feature_off_final', 'pr_body_path']);
+  work_packages: WPS, // what the branch still lacks; implemented, verified and reviewed like a finding
+}, ['branch', 'lint_pass', 'feature_off_final', 'content_unchanged', 'pr_body_path']);
 const K_PACKAGE = S({
   task_dir: str,
   mode: { type: 'string', enum: ['optimize', 'author'] },
@@ -529,7 +579,8 @@ const K_COLLECT = S({
 }, ['status']);
 const REPORT = S({ report_path: str, summary: str }, ['report_path']);
 const LEARN = S({ updates: arr(S({ file: str, change: str }, ['file'])), skill_status: str }, ['updates']);
-const COLLECT = S({ run_dir: str, candidates_path: str, counts: obj }, ['run_dir', 'candidates_path']);
+const COLLECT = S({ lock: LOCK, run_dir: str, candidates_path: str, counts: obj, notes: str },
+  ['lock', 'run_dir', 'candidates_path']);
 const DISPATCH = S({
   queue_path: str,
   top: arr(S({ rank: num, task: str, type: str, level: str, priority: str, source: str }, ['task'])),
@@ -570,14 +621,34 @@ function rolledBack(rb, wpId) {
   return rb ? ` (reset to ${rb.reset_to}${clean ? '' : ', worktree not clean'})` : ' (rollback returned nothing)';
 }
 
+// Setup, then the stop_after check: a finished run record when the run ends here, else null.
+async function start(requireBaseline) {
+  const s = await setup(requireBaseline);
+  if (s === 'busy') return finish('busy', 'Setup');
+  if (!s) return finish('blocked', 'Setup');
+  if (stopHere('Setup')) return finish('stopped', 'Setup');
+  return null;
+}
+
+// true, false, or 'busy' when another Petra task holds the machine (nothing was created then).
 async function setup(requireBaseline) {
   enter('Setup');
   const s = await call('director', 'setup', inputs({ require_baseline: requireBaseline }), SETUP);
+  if (s && s.lock === 'busy') {
+    note('Setup', 'busy', `another Petra task holds this machine${s.notes ? `: ${s.notes}` : ''}`);
+    return 'busy';
+  }
   if (!s || !s.run_dir) {
     note('Setup', 'fail', 'the director returned no run directory');
     return false;
   }
-  Object.assign(C, { run_dir: s.run_dir, branch: s.branch || C.branch, worktree: s.worktree || C.worktree });
+  // GPUs the user gave win; otherwise every later role uses the set Setup pinned.
+  Object.assign(C, { run_dir: s.run_dir, branch: s.branch || C.branch, worktree: s.worktree || C.worktree,
+    gpu_ids: String(C.gpu_ids || s.gpu_ids || '').trim() });
+  if (!C.gpu_ids) {
+    note('Setup', 'fail', 'no GPU set pinned (gpu_ids)');
+    return false;
+  }
   const ok = s.baseline_status === 'pass' || (!requireBaseline && s.baseline_status === 'skip');
   note('Setup', ok ? 'pass' : 'fail',
     `baseline ${s.baseline_status}${s.baseline ? `: ${s.baseline}` : ''}${s.notes ? `; ${s.notes}` : ''}`);
@@ -625,8 +696,9 @@ async function implementAll(wps) {
       const ut = await call('test_engineer', 'unit',
         inputs({ work_package: wp, commit: im.commit, unit_test_cmd: im.unit_test_cmd || wp.test }),
         UNIT, `test_engineer:${wp.id}#${round}`);
-      // A unit test proves something only if it fails without the package: on the parent commit, or
-      // on a copy of the change broken in one way. Only a docs package has nothing to fail.
+      // A unit test proves something only if it can fail: on the parent commit when the package changes
+      // behaviour, on a copy of the change broken in one way when it keeps behaviour (a performance
+      // change, a kernel swap, a refactor). Only a docs package has nothing to fail.
       const bites = !!ut && (['parent', 'mutant'].includes(ut.fails_without_change)
         || (ut.fails_without_change === 'n/a' && wp.kind === 'docs'));
       if (ut && ut.unit_pass === true && ut.feature_off_unchanged === true && bites) {
@@ -635,8 +707,9 @@ async function implementAll(wps) {
       } else if (!ut) {
         feedback = 'the test engineer returned nothing';
       } else if (ut.unit_pass === true && ut.feature_off_unchanged === true) {
-        feedback = `the unit test does not fail without the change (fails_without_change=${ut.fails_without_change}); `
-          + `make it fail on the parent commit or on a copy broken in one way${ut.failure_summary ? `: ${ut.failure_summary}` : ''}`;
+        feedback = `the unit test cannot fail (fails_without_change=${ut.fails_without_change}); make it fail on the parent `
+          + `commit, or on a copy of the change broken in one way when the change keeps behaviour`
+          + `${ut.failure_summary ? `: ${ut.failure_summary}` : ''}`;
       } else {
         feedback = ut.failure_summary || 'the unit or feature-off gate failed';
       }
@@ -674,7 +747,10 @@ async function verifyLoop(extraGates) {
     if (round >= MAX_INVESTIGATE) return { ok: false, reason: `investigation budget exhausted (${failing})` };
 
     enter('Investigate');
-    const inv = await call('investigator', 'investigate', inputs({ failures: v.failures || [], round }),
+    const integratedKernels = R.handoffs.filter((h) => h.status === 'integrated')
+      .map((h) => ({ handoff: h.id, wp: h.integrated_wp, commit: h.commit }));
+    const inv = await call('investigator', 'investigate',
+      inputs({ failures: v.failures || [], round, integrated_kernels: integratedKernels }),
       INVESTIGATE, `investigator#${round}`);
     if (!inv) {
       note('Investigate', 'fail', 'the investigator returned nothing');
@@ -685,13 +761,50 @@ async function verifyLoop(extraGates) {
       if (inv.known_issue) R.known_issues.push(inv.known_issue);
       continue;
     }
+    if (inv.verdict === 'kernel_regression') {
+      const back = await rejectKernels(inv.kernel_handoffs || [], inv.counterexample || inv.summary || '');
+      if (!back.ok) return { ok: false, reason: back.reason };
+      continue;
+    }
     if (inv.verdict === 'fix_needed' && Array.isArray(inv.work_packages) && inv.work_packages.length) {
       const fix = await implementAll(inv.work_packages);
       if (!fix.ok) return { ok: false, reason: `fix ${fix.failed_wp || ''} failed: ${fix.reason}` };
+      await kernelStage(); // hand-offs a fix raised
       continue;
     }
     return { ok: false, reason: 'investigation inconclusive' };
   }
+}
+
+// An integrated kernel that fails Petra's gates goes back to the functional kernel (its commit is
+// reverted). With a back end it is handed back once more, the failing case added to its tests, and
+// integrated again only if the back end passes it; otherwise it ends `rejected`.
+async function rejectKernels(ids, counterexample) {
+  const hs = R.handoffs.filter((h) => ids.includes(h.id) && h.status === 'integrated');
+  if (!hs.length) {
+    note('Investigate', 'fail', `kernel_regression names no integrated kernel (${ids.join(', ') || 'none'})`);
+    return { ok: false, reason: 'kernel_regression without an integrated kernel' };
+  }
+  for (const h of hs) {
+    const rb = await call('implementer', 'rollback', inputs({
+      work_package: { id: h.integrated_wp, goal: `back to the functional kernel of ${h.id}`, test: '' },
+      revert: h.commit, reason: `the integrated kernel fails Petra's gates: ${counterexample}`,
+    }), ROLLBACK, `implementer:revert:${h.id}`);
+    const suffix = rolledBack(rb, h.integrated_wp);
+    if (!rb || rb.clean !== true) {
+      note('Investigate', 'fail', `${h.id}: could not go back to the functional kernel${suffix}`);
+      return { ok: false, reason: `revert of ${h.id} failed` };
+    }
+    R.done = R.done.filter((d) => d.wp !== h.integrated_wp);
+    h.counterexamples = [...(h.counterexamples || []), counterexample];
+    const retry = (h.retries || 0) < 1;
+    h.status = retry ? undefined : 'rejected'; // undefined: pending again for the Kernel stage
+    if (retry) h.retries = (h.retries || 0) + 1;
+    note('Investigate', 'kernel_rejected', `${h.id}: back to the functional kernel${suffix}`
+      + `${retry ? '; handed back once with the failing case' : '; rejected after its retry'}`);
+  }
+  await kernelStage();
+  return { ok: true };
 }
 
 async function performance(claim) {
@@ -741,23 +854,30 @@ async function reviewLoop(extraGates, perfClaim, runPerf) {
     }
     const fix = await implementAll(wps);
     if (!fix.ok) return { ok: false, at: 'Implement' };
+    await kernelStage(); // hand-offs a requested change raised
     const ver = await verifyLoop(extraGates);
     if (!ver.ok) return { ok: false, at: 'Verify' };
     if (runPerf && !(await performance(perfClaim)).ok) return { ok: false, at: 'Performance' };
   }
 }
 
-async function preparePR() {
+// The PR engineer changes no code: the branch it hands over must be the tree Verify and Review passed.
+// What it finds missing comes back as work packages.
+async function preparePR(round) {
   enter('PR');
-  const pr = await call('pr_engineer', 'pr', inputs(), PR);
-  const ok = !!pr && pr.lint_pass === true && pr.feature_off_final === true && !!pr.pr_body_path;
+  const pr = await call('pr_engineer', 'pr', inputs({ round }), PR, `pr_engineer#${round}`);
+  const ok = !!pr && pr.lint_pass === true && pr.feature_off_final === true && pr.content_unchanged === true
+    && !!pr.pr_body_path;
   if (pr) {
     if (pr.branch) C.branch = pr.branch;
     C.pr_body_path = pr.pr_body_path || '';
-    R.pr = { title: pr.title || '', branch: pr.branch, pr_body_path: pr.pr_body_path, push_command: pr.push_command || '' };
+    R.pr = { title: pr.title || '', branch: pr.branch, pr_body_path: pr.pr_body_path, push_command: pr.push_command || '',
+      merges_cleanly: pr.merges_cleanly !== false };
   }
-  note('PR', ok ? 'pass' : 'fail', pr ? (pr.title || pr.branch) : 'the PR engineer returned nothing');
-  return ok;
+  note('PR', ok ? 'pass' : 'fail', !pr ? 'the PR engineer returned nothing'
+    : `${pr.title || pr.branch}${pr.content_unchanged !== true ? '; the branch no longer matches what was verified' : ''}`
+      + `${pr.merges_cleanly === false ? '; conflicts with main, reported in the PR body' : ''}`);
+  return { ok, wps: !pr || ok || pr.content_unchanged !== true ? [] : (pr.work_packages || []) };
 }
 
 // What a back end returned, trimmed to the fields the liaison needs (GEAK lanes also return
@@ -776,7 +896,8 @@ function backendSummary(r) {
 // Kernel hand-offs go to the selected back end. A gain comes back as a work package that the
 // implementer integrates and the test engineer re-verifies; the later Verify and Performance gates
 // judge it with everything else. A back end that fails or finds no gain never blocks the task:
-// the functional kernel stays.
+// the functional kernel stays. Runs again after every fix loop, for hand-offs raised there and for a
+// kernel handed back after it failed Verify (rejectKernels).
 async function kernelStage() {
   const pending = R.handoffs.filter((h) => h.owner === 'kernel_workflow' && !h.status);
   if (!pending.length) return { integrated: 0 };
@@ -801,7 +922,7 @@ async function kernelStage() {
         workflow_dir: `${KERNEL_BACKEND_DIR}/kernel_workflow`,
         mode: pkg.mode,
         budget: C.kernel_budget,
-        gpu_ids: C.gpu_ids || '0',
+        gpu_ids: C.gpu_ids,
         task: pkg.task || h.reason || '',
         exp_root: `${C.run_dir}/kernel`,
         apply_to_original: 'false',
@@ -825,7 +946,11 @@ async function kernelStage() {
     if (res && res.status === 'improved' && res.integrate_wp) {
       const r = await implementAll([res.integrate_wp]);
       h.status = r.ok ? 'integrated' : 'integration_failed';
-      if (r.ok) integrated += 1;
+      if (r.ok) {
+        integrated += 1;
+        h.integrated_wp = res.integrate_wp.id;
+        h.commit = (R.done.find((d) => d.wp === res.integrate_wp.id) || {}).commit || '';
+      }
     }
   }
   note('Kernel', integrated ? 'integrated' : 'no_gain', pending.map((h) => `${h.id}:${h.status}`).join(', '));
@@ -867,16 +992,28 @@ async function deliver(wps, extraGates, perfClaim, runPerf) {
   if (!rev.ok) return finish('blocked', rev.at);
   if (stopHere('Review')) return finish('stopped', 'Review');
 
-  if (!(await preparePR())) return finish('blocked', 'PR');
-  return finish('ready_for_review', 'PR');
+  // What the PR engineer finds missing goes back through Implement, Verify and Review, once.
+  for (let round = 0; ; round++) {
+    const pr = await preparePR(round);
+    if (pr.ok) return finish('ready_for_review', 'PR');
+    if (!pr.wps.length || round >= 1) return finish('blocked', 'PR');
+    const fix = await implementAll(pr.wps);
+    if (!fix.ok) return finish('blocked', 'Implement');
+    await kernelStage();
+    const again = await verifyLoop(extraGates);
+    if (!again.ok) return finish('blocked', 'Verify');
+    if (runPerf && !(await performance(perfClaim)).ok) return finish('blocked', 'Performance');
+    const reviewed = await reviewLoop(extraGates, perfClaim, runPerf);
+    if (!reviewed.ok) return finish('blocked', reviewed.at);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Modes
 // ---------------------------------------------------------------------------
 async function runFeature() {
-  if (!(await setup(true))) return finish('blocked', 'Setup');
-  if (stopHere('Setup')) return finish('stopped', 'Setup');
+  const early = await start(true);
+  if (early) return early;
 
   // Resume after a human approved design.md (a run that stopped at Design).
   if (RESUME === 'implement') {
@@ -931,7 +1068,8 @@ async function runFeature() {
 }
 
 async function runIssue() {
-  if (!(await setup(false))) return finish('blocked', 'Setup');
+  const early = await start(false);
+  if (early) return early;
 
   enter('Triage');
   const tri = await call('issue_triager', 'triage', inputs(), TRIAGE);
@@ -962,15 +1100,21 @@ async function runIssue() {
   C.repro_cmd = reproCmd;
   note('Reproduce', rep.reproduced ? 'reproduced' : 'not_reproduced', rep.evidence);
   if (!rep.reproduced) return finish(expectFixed ? 'fixed_on_main' : 'not_reproduced', 'Reproduce');
+  // A performance issue is fixed when the reported number comes back; the reproduction states it.
+  const runPerf = tri.category === 'performance';
+  const issueClaim = runPerf ? String(rep.perf_claim || '').trim() : '';
+  if (runPerf && !issueClaim) {
+    note('Reproduce', 'fail', 'a performance issue reproduced without a perf_claim: the number the fix must restore');
+    return finish('blocked', 'Reproduce');
+  }
   if (stopHere('Reproduce')) return finish('stopped', 'Reproduce');
 
   const gates = [{ gate: 'issue_repro', cmd: reproCmd, expect: 'fixed' }];
-  const runPerf = tri.category === 'performance';
   if (tri.action === 'push_existing_pr') {
     const prs = (tri.existing_prs || []).join(', ');
     const wp = { id: 'WP1', kind: 'apply_pr', goal: `apply the existing fix ${prs} and complete what verification needs`,
       test: 'the issue reproduction no longer fails; the PR\'s own tests pass', files: [], depends_on: [] };
-    return deliver([wp], gates, '', runPerf);
+    return deliver([wp], gates, issueClaim, runPerf);
   }
 
   enter('Diagnose');
@@ -984,11 +1128,12 @@ async function runIssue() {
   if (dg.verdict !== 'fix_needed' || !(dg.work_packages || []).length) return finish('diagnosed', 'Diagnose');
   if (stopHere('Diagnose')) return finish('stopped', 'Diagnose');
 
-  return deliver(dg.work_packages, gates, '', runPerf);
+  return deliver(dg.work_packages, gates, issueClaim, runPerf);
 }
 
 async function runCi() {
-  if (!(await setup(false))) return finish('blocked', 'Setup');
+  const early = await start(false);
+  if (early) return early;
 
   enter('Classify');
   const cl = await call('ci_guardian', 'classify', inputs(), CLASSIFY);
@@ -1022,7 +1167,8 @@ async function runCi() {
 }
 
 async function runPerf() {
-  if (!(await setup(true))) return finish('blocked', 'Setup');
+  const early = await start(true);
+  if (early) return early;
 
   enter('Profile');
   const pf = await call('perf_engineer', 'profile', inputs(), PROFILE);
@@ -1071,6 +1217,10 @@ async function runScan() {
   enter('Collect');
   const sources = Array.isArray(A.sources) && A.sources.length ? A.sources : ['upstream', 'issues', 'ci', 'hardware'];
   const col = await call('scout', 'collect', inputs({ sources, since: String(A.since || '') }), COLLECT);
+  if (col && col.lock === 'busy') {
+    note('Collect', 'busy', `another Petra task holds this machine${col.notes ? `: ${col.notes}` : ''}`);
+    return finish('busy', 'Collect');
+  }
   if (!col || !col.run_dir) {
     note('Collect', 'fail', 'no candidates');
     return finish('blocked', 'Collect');

@@ -2,6 +2,9 @@
 
 ## Before opening the PR
 
+Petra's implementer meets these in every work package; the reviewer and the PR engineer check them and
+send what is missing back as work packages, so the branch that is pushed is the one that was verified.
+
 - [ ] Debug instrumentation removed, or gated behind an environment switch that is off by default.
 - [ ] Feature-off check (G0) passes on the final commit.
 - [ ] The target repo's formatters/linters pass locally (sglang: `pre-commit run --all-files`, which
@@ -36,6 +39,8 @@ Accuracy Tests, Speed Tests, known limitations, checklist.
 
 ## Keeping up with main
 
+- Before the PR exists, Petra only trial-merges main to report conflicts; it does not update a
+  verified branch. Updating it is the owner's step, and the gates run again on the merged tree.
 - Prefer merging main into the PR branch (no force push, review history kept); maintainers squash at
   merge time.
 - Do a trial merge in a throwaway worktree first; list conflicts; compile-check and smoke-test the merged

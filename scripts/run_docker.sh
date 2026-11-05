@@ -4,12 +4,17 @@
 #   scripts/run_docker.sh                                # the newest daily sglang image, ROCm 10, MI35x
 #   IMAGE_VARIANT=rocm10-mi30x scripts/run_docker.sh     # the newest one for another GPU or ROCm
 #   IMAGE=rocm/sgl-dev:<tag> NAME=<name> scripts/run_docker.sh
+#   DOCKER_SOCKET=1 scripts/run_docker.sh                # also mount the host's Docker socket
 #
 # Tasks test the newest sglang unless you pin IMAGE. It removes the previous container of the same name
 # first, and with it anything still running there; get back into a running one with
 # `docker exec -it <name> bash`. Nothing installed inside a container survives the next run: Claude
 # Code, its state, the checkouts and your keys live on the host under /home, mounted at the same path.
 # Run README step 3 in every new container.
+#
+# The host's Docker socket is not mounted by default: Petra's agents run as root with permissions
+# auto-approved, and the socket would let them stop or start any container on the host. Petra inside the
+# container does not need it.
 VARIANT=${IMAGE_VARIANT:-rocm10-mi35x}
 NAME=${NAME:-$USER}
 SUDO=$([ -w /var/run/docker.sock ] || echo sudo)
@@ -29,14 +34,14 @@ MOUNTS=()
 for d in /home /data /data2 /apps /mnt /shared /nfs_shared1 /kmd2 $EXTRA_MOUNTS; do
   [ -d "$d" ] && MOUNTS+=(-v "$d:$d")
 done
+[ "$DOCKER_SOCKET" = 1 ] && MOUNTS+=(-v /var/run/docker.sock:/var/run/docker.sock -v /usr/bin/docker:/usr/bin/docker:ro)
 
 $SUDO docker stop "$NAME" >/dev/null 2>&1
 $SUDO docker rm "$NAME" >/dev/null 2>&1
 exec $SUDO docker run -it \
   --privileged --ipc=host --network=host --device=/dev/kfd --device=/dev/dri --group-add video \
-  --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
-  -v /var/run/docker.sock:/var/run/docker.sock -v /usr/bin/docker:/usr/bin/docker:ro -w /workspace \
+  --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -w /workspace \
   "${MOUNTS[@]}" \
-  -e PYTHONDONTWRITEBYTECODE=1 -e DISABLE_AUTOUPDATER=1 -e PETRA_IMAGE="$IMAGE" \
+  -e PYTHONDONTWRITEBYTECODE=1 -e DISABLE_AUTOUPDATER=1 -e PETRA_IMAGE="$IMAGE" -e PETRA_CONTAINER="$NAME" \
   --shm-size=512G --ulimit memlock=-1 --ulimit stack=67108864 \
   --entrypoint /bin/bash --name "$NAME" "$IMAGE"

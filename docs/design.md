@@ -105,14 +105,19 @@ that lacks its model or its workload.
 Kernel back ends (`kernel_backend`): `none` records hand-offs (default), `geak` nests GEAK's single-
 language kernel lane once from the checkout `kernel_backend_dir` (as GEAK's e2e_workflow does),
 `command` runs any other CLI. A gain is integrated by the implementer and judged by Petra's own gates;
-a failing back end never blocks a task. The `geak` back end is the only place a run uses GEAK;
+a failing back end never blocks a task. An integrated kernel that fails Verify is reverted to the
+functional kernel and handed back once with the failing case as a test (`kernel_backends.md`). The
+`geak` back end is the only place a run uses GEAK;
 outside Claude Code, GEAK's workflow runtime is what executes `petra.js` (other CLIs, the dry run).
 
 Petra runs inside the framework's ROCm container as root, as GEAK does, next to the GPUs and the
 framework's Python environment. Claude Code is installed once on the host and linked into the
 container, with root's Claude Code state kept on the host too; the checkouts stay on the host, and
 whatever a run writes into them as root goes back to their owner (`scripts/restore_owner.sh`), so
-host-side git and the human's push keep working. Tasks test the newest sglang: unless the user names an
+host-side git and the human's push keep working. Machines are shared: one Petra task runs per machine at a
+time (a lock in `/dev/shm`, `scripts/run_lock.py`; a second run ends as `busy`), a run uses only the
+GPUs Setup pinned (through `HIP_VISIBLE_DEVICES`) and touches only the processes and containers it
+started; the host's Docker socket is not mounted by default. Tasks test the newest sglang: unless the user names an
 image or a container, the container runs the newest daily `rocm/sgl-dev` image for its ROCm and GPU
 (`scripts/latest_image.py`), and every server and test runs the task worktree's code, created from the
 current upstream main and put first on `PYTHONPATH`, never the copy of sglang installed in the image.
@@ -131,7 +136,12 @@ current upstream main and put first on `PYTHONPATH`, never the copy of sglang in
   broken copy). Adapted from SkyDiscover-Synthesize's auditor and mutation-checked tests.
 - A failed verification goes to the investigator: a fix becomes new work packages; a failure the
   same-pattern baseline shares becomes a known issue and the gate is re-judged on the rest.
-- Budgets: fix rounds per work package, investigation rounds, work packages per task, agent retries.
+- Budgets: fix rounds per work package, investigation and review rounds, work packages per task, agent
+  retries. A retry is told to check what the failed attempt left; a call that timed out is not
+  retried, because the agent cannot be cancelled and may still be running.
+- The PR phase changes no code: hygiene and lint happen in Implement, gaps found at PR come back as work
+  packages through Implement, Verify and Review, and main is only trial-merged to report conflicts, so
+  the pushed branch is the one that was verified.
 - Human checkpoints: the intake's questions (`needs_input`); `stop_after` any phase; L3 tasks and designs the architect flags stop at Design
   (`awaiting_design_review`) and continue with `resume_from: "implement"`; the PR is prepared, never
   pushed; issue replies are drafts.

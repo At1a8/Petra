@@ -18,7 +18,9 @@ Work package format (every field required except `files` and `depends_on`):
 ## PHASE=design (feature)
 
 If `approved_design` is true, a human approved `design.md`: do not change it. Re-read it and return its
-work packages exactly as written (`gate_ok` true if they still satisfy the rules below).
+work packages exactly as written (`gate_ok` true if they still satisfy the rules below), with
+`perf_claim` copied from `RUN_DIR/feature_spec.md` (empty when it claims none): the resumed run
+measures exactly that claim.
 
 Otherwise complete `RUN_DIR/design.md` (`templates/design.md`) sections 4–11:
 

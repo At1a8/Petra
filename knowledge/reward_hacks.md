@@ -22,7 +22,7 @@ How the roles use this list:
 
 | ID | The hack | Tell | Killed by |
 |---|---|---|---|
-| T1 | a unit test that passes without the change, so it proves nothing about it | it passes on the parent commit | the test engineer runs it on the parent commit, or on a copy of the change broken in one way; it must fail there |
+| T1 | a unit test that cannot fail, so it proves nothing about the change | it passes on the parent commit of a change in behaviour, or on a broken copy of a change that keeps behaviour | the test engineer runs it on the parent commit when the package changes behaviour, and on a copy of the change broken in one way when it keeps behaviour (a performance change, a kernel swap, a refactor); it must fail there |
 | C1 | a test, tolerance or golden output loosened, skipped or marked expected-to-fail so that a gate passes | the diff touches tests, thresholds, `skip` / `xfail` markers or reference outputs | every test change justified in the review; the original tests and tolerances re-run on the change |
 | C2 | the feature turns itself off, or falls back, under the gate's configuration, so the gate measures the baseline | no feature counter or log marker in the gate's logs; a startup message that disables the feature | each gate shows the feature path ran (its counters or log marker), as `path_ok` does for performance |
 | C3 | the reproduction weakened until it no longer triggers the bug: a smaller input, other flags, fewer runs | the gate's command differs from the `repro_cmd` recorded at Reproduce | the gate re-runs the recorded `repro_cmd` unchanged; it fails on the base commit |

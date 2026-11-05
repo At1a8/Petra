@@ -9,20 +9,31 @@ Read: `knowledge/guardrails.md`, `knowledge/dev_methodology.md`, `knowledge/env_
 ## PHASE=setup (every mode except scan)
 
 Inputs: `require_baseline` (true for `feature` and `perf`: the task cannot continue without a baseline
-that passes), `resume_run_dir`.
+that passes), `resume_run_dir`, `lock_idle_hours`.
 
+0. **One task per machine.** Before anything else, choose `RUN_DIR` (step 1: `resume_run_dir`, the
+   directory an earlier attempt created, or a new path) and take the machine:
+   `python3 <petra_dir>/scripts/run_lock.py acquire --run-dir RUN_DIR --mode <mode> --task "<task>"
+   --idle-hours <lock_idle_hours>`. Exit 1 means another Petra task holds this machine: create nothing
+   and return `lock: "busy"`, `run_dir: ""`, `baseline_status: "skip"`, `gpu_ids: ""`, with the holder
+   (its run directory, task, container and start) and the release command in `notes`. Otherwise
+   `lock: "acquired"`; a lock taken over from a run that finished or went silent is noted.
 1. **Run directory.** If `resume_run_dir` is set, reuse it: check that it exists, that its worktree and
    branch exist, and re-run one baseline smoke to confirm the environment still matches the ledger.
    Otherwise create `RUN_DIR=<exp_root>/<mode>_<slug>_<YYYYmmdd-HHMMSS>` (take the time from `date`, state
    the timezone) and write the inputs — the task definition (`templates/task_definition.md`) and the
-   intake's `assumptions` — to `RUN_DIR/run.json`.
+   intake's `assumptions` — to `RUN_DIR/run.json`. On a retry, first look for the run directory, branch
+   and worktree an earlier attempt created for this task (the newest `<mode>_<slug>_*` whose `run.json`
+   holds this definition) and reuse them.
 2. **Task branch and worktree.** Create a worktree under `RUN_DIR/wt` on a new branch `petra/<slug>`
    from the base commit the task names (default: the current upstream main), then give the new files
    back to the checkout's owner (`scripts/restore_owner.sh <framework_dir>/.git RUN_DIR`;
    `env_hygiene.md`). Never change a checkout a running server imports from.
-3. **Environment.** Pin the framework commit, container image, ROCm and PyTorch versions and the GPU set
-   (`gpu_ids`; if empty, pick free GPUs and say which). Servers, tests and benchmarks run where Petra
-   runs, normally inside the container. When `container` is set (Petra on the host), run them with
+3. **Environment.** Pin the framework commit, container image, ROCm and PyTorch versions and the GPU set,
+   and return it as `gpu_ids`: the given one, or, when none was given, GPUs that `rocm-smi` shows with no
+   process and no memory in use, as many as the task needs (`env_hygiene.md`). Every later role uses
+   exactly these, through `HIP_VISIBLE_DEVICES`. Servers, tests and benchmarks run where Petra runs,
+   normally inside the container. When `container` is set (Petra on the host), run them with
    `docker exec <container> ...` and check the worktree is visible there at the same path. Write one
    launch script with a mode switch (baseline / feature) and a tag; one log per launch; poll the health
    endpoint; read the effective `server_args=` line.
@@ -51,9 +62,10 @@ that passes), `resume_run_dir`.
 Return:
 
 ```json
-{"run_dir": "/abs/RUN_DIR", "baseline_status": "pass | fail | skip",
+{"lock": "acquired | busy", "run_dir": "/abs/RUN_DIR", "baseline_status": "pass | fail | skip",
  "baseline": "<suites, runs, spread; or why it failed or was skipped>",
- "branch": "petra/<slug>", "worktree": "/abs/RUN_DIR/wt", "notes": "<pinned commit, image, GPUs>"}
+ "branch": "petra/<slug>", "worktree": "/abs/RUN_DIR/wt", "gpu_ids": "0,1,2,3",
+ "notes": "<pinned commit, image, versions>"}
 ```
 
 ## PHASE=spec (feature)
@@ -102,8 +114,11 @@ produced so far.
   arguments that would run them later (`kernel_backend=geak` with `kernel_backend_dir`, or
   `kernel_backend=command` with `kernel_backend_command`; `knowledge/kernel_backends.md`). List reply
   drafts. State the timezone of every time.
-- Last, hand everything this run wrote back to its owners:
+- Then hand everything this run wrote back to its owners:
   `scripts/restore_owner.sh <exp_root> <framework_dir>/.git` (`env_hygiene.md`).
+- Last, free the machine for the next task: `python3 <petra_dir>/scripts/run_lock.py release --run-dir
+  RUN_DIR`. Stop the servers and processes this run started first; a run that ends leaves nothing
+  running.
 
 Return:
 

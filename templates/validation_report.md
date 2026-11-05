@@ -24,7 +24,7 @@
 | Gate | Suite | Baseline (same pattern) | Feature | Verdict | Artifact |
 |---|---|---|---|---|---|
 | G0 | | | | | |
-| G1 | unit tests, each failing without its change (parent commit or broken copy) | | | | |
+| G1 | unit tests, each able to fail (parent commit, or a broken copy when the change keeps behaviour) | | | | |
 | G2 | | | | | |
 | G3 | | | | | |
 | G4 | | | | | |

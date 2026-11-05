@@ -57,3 +57,11 @@ After integration a hand-off ends `integrated`, or `integration_failed` (rolled 
 A back end's own numbers are never Petra's evidence: an integrated kernel passes Petra's gates like
 any other change (`guardrails.md`: measured data wins). A failing or slow back end never blocks the
 task.
+
+An integrated kernel that fails Verify — the investigator's control shows the failure goes away with
+its commit reverted (`kernel_regression`) — goes back to the functional kernel: its commit is
+reverted, the failing case is recorded on the hand-off as a counterexample, and the hand-off goes to
+the back end once more with that case added to its tests. A retry that passes is integrated and
+verified again; one that fails, or a kernel that fails Verify a second time, ends `rejected`, and the
+task goes on with the functional kernel. Hand-offs raised while fixing a failed Verify or a review
+reach the Kernel phase too.

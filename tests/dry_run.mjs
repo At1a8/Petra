@@ -37,7 +37,7 @@ const WP = (id, extra) => ({ id, goal: `goal of ${id}`, kind: 'framework', files
 // Answers every role gives unless a scenario overrides them.
 const DEFAULTS = {
   'intake:define': (ins) => ({ status: 'ready', task_def: ins.given || {}, provenance: {}, assumptions: [], questions: [], summary: 'as given' }),
-  'director:setup': () => ({ run_dir: RUN, baseline_status: 'pass', baseline: '3/3 runs within spread', branch: 'petra/task', worktree: `${RUN}/wt` }),
+  'director:setup': () => ({ lock: 'acquired', run_dir: RUN, baseline_status: 'pass', baseline: '3/3 runs within spread', branch: 'petra/task', worktree: `${RUN}/wt`, gpu_ids: '0,1' }),
   'director:spec': () => ({ spec_path: `${RUN}/feature_spec.md`, gates_measurable: true, perf_claim: '+20% output tok/s at equal HBM' }),
   'director:report': () => ({ report_path: `${RUN}/report.md`, summary: 'done' }),
   'analyst:recon': () => ({ design_path: `${RUN}/design.md`, subsystems: [{ name: 'scheduler', files: ['a.py'], hook: 'h' }], unmapped: [], gap_type: 'framework-only', level: 'L1' }),
@@ -54,13 +54,13 @@ const DEFAULTS = {
     { id: 'O1', kind: 'host_sync', where: 'aiter_backend.py', evidence: 'trace', upper_bound_pct: 4, owner: 'petra' },
     { id: 'O2', kind: 'kernel', where: 'moe', evidence: 'trace', upper_bound_pct: 9, owner: 'kernel_workflow' }] }),
   'reviewer:review': () => ({ verdict: 'approve', findings: [{ severity: 'minor', where: 'x.py:1', issue: 'a name' }], review_path: `${RUN}/review.md`, summary: 'one minor' }),
-  'pr_engineer:pr': () => ({ branch: 'petra/task', title: '[Fix] [AMD] scope: thing', commits: ['c_WP1'], lint_pass: true, feature_off_final: true, upstream_synced: true, pr_body_path: `${RUN}/pr_body.md`, push_command: 'git push origin petra/task' }),
+  'pr_engineer:pr': () => ({ branch: 'petra/task', title: '[Fix] [AMD] scope: thing', commits: ['c_WP1'], lint_pass: true, feature_off_final: true, content_unchanged: true, merges_cleanly: true, pr_body_path: `${RUN}/pr_body.md`, push_command: 'git push origin petra/task' }),
   'curator:learn': () => ({ updates: [{ file: 'knowledge/known_issues.md', change: 'none' }], skill_status: 'draft' }),
   'issue_triager:triage': () => ({ priority: 'P0', category: 'crash', action: 'reproduce', reason: 'default config crash', existing_prs: [], triage_path: `${RUN}/issue_triage.md`, reply_draft_path: `${RUN}/reply.md` }),
   'issue_triager:reproduce': () => ({ reproduced: true, repro_cmd: 'bash repro.sh', evidence: 'segfault 3/3' }),
   'ci_guardian:classify': () => ({ failure_class: 'code_regression', failing_test_cmd: 'pytest test_x.py', window: 'a..b', evidence: 'new regression since 10-21', triage_path: `${RUN}/ci_triage.md` }),
   'ci_guardian:bisect': () => ({ culprit: 'deadbeef', confirmed: true, work_packages: [WP('WP1')], evidence: 'fails at culprit, passes at parent' }),
-  'scout:collect': () => ({ run_dir: RUN, candidates_path: `${RUN}/candidates.json`, counts: { upstream: 3, issues: 32, ci: 76, hardware: 5 } }),
+  'scout:collect': () => ({ lock: 'acquired', run_dir: RUN, candidates_path: `${RUN}/candidates.json`, counts: { upstream: 3, issues: 32, ci: 76, hardware: 5 } }),
   'dispatcher:dispatch': () => ({ queue_path: `${RUN}/task_queue.md`, top: [{ rank: 1, task: 'GLM-5.3 DCP crash', type: 'bug', level: 'L1', priority: 'P0', source: 'issues' }], matrix_changes: 2 }),
   'kernel_liaison:package': (ins) => ({ task_dir: `${RUN}/kernel/${ins.handoff.id}/task`, mode: 'optimize', target_language: 'hip',
     op_spec: { op_kind: 'swap_in' }, task: ins.handoff.reason === 'FAIL' ? 'FAIL on purpose' : 'decode, M <= 64' }),
@@ -104,7 +104,7 @@ function makeBackend(overrides) {
     calls.push({ key, n, ins, model, prompt });
     const f = (overrides && overrides[key]) || DEFAULTS[key];
     if (!f) throw new Error(`no scripted answer for ${key}`);
-    const ans = f(ins, n);
+    const ans = await f(ins, n);
     return { text: JSON.stringify(ans) };
   };
   return { backend: b, calls };
@@ -167,13 +167,13 @@ const scenarios = [
     });
     check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
     const rounds = r.calls.filter((c) => c.key === 'implementer:implement');
-    check(rounds.length === 3 && rounds[1].ins.feedback.includes('does not fail without the change')
+    check(rounds.length === 3 && rounds[1].ins.feedback.includes('cannot fail')
       && rounds[1].ins.feedback.includes('never calls the new path'), `feedback: ${rounds[1] && rounds[1].ins.feedback}`);
   }],
   ['implement: only a docs package may have nothing to fail', async () => {
     const asNa = (ins) => ({ wp: ins.work_package.id, unit_pass: true, feature_off_unchanged: true, fails_without_change: 'n/a' });
     const docs = await run({ mode: 'feature', task: 't' }, {
-      'architect:design': () => ({ design_path: `${RUN}/design.md`, work_packages: [WP('D1', { kind: 'docs' })], gate_ok: true }),
+      'architect:design': () => ({ design_path: `${RUN}/design.md`, work_packages: [WP('D1', { kind: 'docs' })], gate_ok: true, perf_claim: '' }),
       'test_engineer:unit': asNa,
     });
     check(docs.result.status === 'ready_for_review', `docs: ${docs.result.status}`);
@@ -226,6 +226,94 @@ const scenarios = [
     check(!r.keys.includes('director:spec') && !r.keys.includes('analyst:recon'), 'spec and recon skipped');
     const d = r.calls.find((c) => c.key === 'architect:design');
     check(d && d.ins.approved_design === true, 'architect told the design is approved');
+    const pe = r.calls.find((c) => c.key === 'perf_engineer:perf_eval');
+    check(pe && pe.ins.claim === '+20% output tok/s at equal HBM', `the resumed run measures the claim: ${pe && pe.ins.claim}`);
+    const noClaim = await run({ mode: 'feature', task: 't', resume_from: 'implement', run_dir: RUN }, {
+      'architect:design': () => ({ design_path: `${RUN}/design.md`, work_packages: [WP('WP1')], gate_ok: true }),
+    });
+    check(noClaim.result.status === 'blocked' && noClaim.result.stopped_at === 'Design', `a design that does not state its claim: ${noClaim.result.status}`);
+  }],
+  ['agents: a timed-out call is not retried and goes on the attention list', async () => {
+    const r = await run({ mode: 'feature', task: 't', agent_retries: 3, agent_timeout_ms: 100 }, {
+      'verify_engineer:verify': async () => {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        return { all_pass: true, failures: [] };
+      },
+    });
+    check(r.result.status === 'blocked' && r.result.stopped_at === 'Verify', `status ${r.result.status}`);
+    check(r.keys.filter((k) => k === 'verify_engineer:verify').length === 1, 'a timed-out call is not run twice');
+    check(r.result.attention.some((a) => String(a.call).startsWith('verify_engineer') && a.issue.includes('may still be running')),
+      `attention: ${JSON.stringify(r.result.attention)}`);
+  }],
+  ['agents: a failed call is retried, and the retry checks what the first one left', async () => {
+    const r = await run({ mode: 'feature', task: 't', agent_retries: 2 }, {
+      'verify_engineer:verify': (ins, n) => (n === 1 ? { verdict: 'not the schema' } : { all_pass: true, failures: [] }),
+    });
+    check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
+    const calls = r.calls.filter((c) => c.key === 'verify_engineer:verify');
+    check(calls.length === 2 && !calls[0].prompt.includes('This is attempt') && calls[1].prompt.includes('This is attempt 2'),
+      'the second attempt is told to check what the first left');
+  }],
+  ['setup: the GPUs Setup pins reach every later role; the user\'s GPUs win', async () => {
+    const picked = await run({ mode: 'feature', task: 't' }, {
+      'director:setup': () => ({ lock: 'acquired', run_dir: RUN, baseline_status: 'pass', worktree: `${RUN}/wt`, gpu_ids: '4,5' }),
+    });
+    const later = picked.calls.filter((c) => !['director:setup', 'intake:define'].includes(c.key));
+    check(later.length > 5 && later.every((c) => c.ins.gpu_ids === '4,5'), 'every role after Setup sees gpu_ids=4,5');
+    check(later[0].prompt.includes('HIP_VISIBLE_DEVICES'), 'roles are told to export HIP_VISIBLE_DEVICES');
+    const given = await run({ mode: 'feature', task: 't', gpu_ids: '2' }, {
+      'director:setup': () => ({ lock: 'acquired', run_dir: RUN, baseline_status: 'pass', gpu_ids: '6,7' }),
+    });
+    check(String(given.calls.find((c) => c.key === 'verify_engineer:verify').ins.gpu_ids) === '2', 'the user\'s GPUs win');
+    const none = await run({ mode: 'issue', task: 'i' }, {
+      'director:setup': () => ({ lock: 'acquired', run_dir: RUN, baseline_status: 'skip', gpu_ids: '' }),
+    });
+    check(none.result.status === 'blocked' && none.result.stopped_at === 'Setup', `no GPUs pinned: ${none.result.status}`);
+  }],
+  ['lock: while another task holds the machine, a run ends busy and creates nothing', async () => {
+    const busy = { lock: 'busy', run_dir: '', baseline_status: 'skip', gpu_ids: '',
+      notes: 'held by /x/exp/perf_dsv41 (container fangyuan) since 09:12; release: scripts/run_lock.py release --force' };
+    for (const mode of ['feature', 'issue', 'ci', 'perf']) {
+      const r = await run({ mode, task: 't' }, { 'director:setup': () => busy });
+      check(r.result.status === 'busy' && r.result.stopped_at === 'Setup' && eqList(r.keys, ['director:setup']),
+        `${mode}: ${r.result.status}, calls ${r.keys}`);
+      check(r.result.run_dir === '' && r.result.phases[0].summary.includes('release --force'), `${mode}: the holder is reported`);
+    }
+    const scan = await run({ mode: 'scan' }, {
+      'scout:collect': () => ({ lock: 'busy', run_dir: '', candidates_path: '', notes: 'held by /x/exp/issue_41299' }),
+    });
+    check(scan.result.status === 'busy' && eqList(scan.keys, ['scout:collect']), `scan: ${scan.result.status}`);
+    const setup = (await run({ mode: 'issue', task: 'i' })).calls.find((c) => c.key === 'director:setup');
+    check(String(setup.ins.lock_idle_hours) === '12', `idle hours for the lock: ${setup.ins.lock_idle_hours}`);
+  }],
+  ['pr: what the PR engineer finds missing goes back through implement, verify and review', async () => {
+    const r = await run({ mode: 'ci', task: 'c' }, {
+      'pr_engineer:pr': (ins, n) => (n === 1
+        ? { branch: 'petra/task', lint_pass: false, feature_off_final: true, content_unchanged: true, pr_body_path: `${RUN}/pr_body.md`,
+          work_packages: [WP('H1', { goal: 'register the new test in test/registered' })] }
+        : { branch: 'petra/task', lint_pass: true, feature_off_final: true, content_unchanged: true, pr_body_path: `${RUN}/pr_body.md` }),
+    });
+    check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
+    const afterPr = r.phases.slice(r.phases.indexOf('PR'));
+    check(eqList(afterPr, ['PR', 'Implement', 'Verify', 'Review', 'PR', 'Report']), `phases after the first PR: ${afterPr}`);
+    check(r.result.done.some((d) => d.wp === 'H1'), 'the hygiene package was verified');
+    const changed = await run({ mode: 'ci', task: 'c' }, {
+      'pr_engineer:pr': () => ({ branch: 'petra/task', lint_pass: true, feature_off_final: true, content_unchanged: false,
+        pr_body_path: `${RUN}/pr_body.md`, work_packages: [WP('H2')] }),
+    });
+    check(changed.result.status === 'blocked' && changed.result.stopped_at === 'PR', `a branch that changed after review: ${changed.result.status}`);
+    check(changed.keys.filter((k) => k === 'implementer:implement').length === 1, 'no loop on a branch that changed after review');
+  }],
+  ['stop_after: every mode stops after Setup; a phase the mode lacks is asked about', async () => {
+    for (const mode of ['issue', 'ci', 'perf']) {
+      const r = await run({ mode, task: 't', stop_after: 'Setup' });
+      check(r.result.status === 'stopped' && r.result.stopped_at === 'Setup' && r.keys.at(-2) === 'director:report',
+        `${mode}: ${r.result.status} at ${r.result.stopped_at}`);
+    }
+    check(asks(await run({ mode: 'feature', task: 't', stop_after: 'Reproduce' }), 'stop_after'), 'Reproduce is not a feature phase');
+    check(asks(await run({ mode: 'ci', task: 't', stop_after: 'Performance' }), 'stop_after'), 'ci never runs Performance');
+    const ok = await run({ mode: 'issue', task: 'i', stop_after: 'reproduce' });
+    check(ok.result.status === 'stopped' && ok.result.stopped_at === 'Reproduce', `case does not matter: ${ok.result.status}`);
   }],
   ['feature: a work package that never passes is rolled back', async () => {
     const r = await run({ mode: 'feature', task: 't', max_fix_rounds: 1 }, {
@@ -238,13 +326,13 @@ const scenarios = [
   }],
   ['feature: baseline that does not reproduce blocks at Setup', async () => {
     const r = await run({ mode: 'feature', task: 't' }, {
-      'director:setup': () => ({ run_dir: RUN, baseline_status: 'fail', baseline: 'spread 9% > 2%' }),
+      'director:setup': () => ({ lock: 'acquired', run_dir: RUN, baseline_status: 'fail', baseline: 'spread 9% > 2%', gpu_ids: '0' }),
     });
     check(r.result.status === 'blocked' && r.result.stopped_at === 'Setup', `status ${r.result.status}`);
     check(r.keys.includes('director:report'), 'blocked runs still get a report');
   }],
   ['setup: a skipped baseline is enough only where none is required', async () => {
-    const skip = { 'director:setup': () => ({ run_dir: RUN, baseline_status: 'skip', baseline: 'not needed yet' }) };
+    const skip = { 'director:setup': () => ({ lock: 'acquired', run_dir: RUN, baseline_status: 'skip', baseline: 'not needed yet', gpu_ids: '0' }) };
     const feature = await run({ mode: 'feature', task: 't' }, skip);
     check(feature.result.status === 'blocked' && feature.result.stopped_at === 'Setup', `feature with skip: ${feature.result.status}`);
     const issue = await run({ mode: 'issue', task: 'i' }, skip);
@@ -319,10 +407,16 @@ const scenarios = [
       'issue_triager:triage': () => ({ priority: 'P1', category: 'Performance', action: 'reproduce', triage_path: `${RUN}/t.md` }),
     });
     check(odd.result.status === 'blocked' && odd.result.stopped_at === 'Triage', `category Performance: ${odd.result.status}`);
+    const perfTriage = { 'issue_triager:triage': () => ({ priority: 'P1', category: 'performance', action: 'reproduce', triage_path: `${RUN}/t.md` }) };
     const perf = await run({ mode: 'issue', task: 'i' }, {
-      'issue_triager:triage': () => ({ priority: 'P1', category: 'performance', action: 'reproduce', triage_path: `${RUN}/t.md` }),
+      ...perfTriage,
+      'issue_triager:reproduce': () => ({ reproduced: true, repro_cmd: 'bash bench.sh', perf_claim: 'decode tok/s back to 2400 at c32 (v0.5.21)', evidence: '1710 tok/s 3/3' }),
     });
     check(perf.phases.includes('Performance') && perf.result.status === 'ready_for_review', `performance issue: ${perf.phases}`);
+    const pe = perf.calls.find((c) => c.key === 'perf_engineer:perf_eval');
+    check(pe && pe.ins.claim === 'decode tok/s back to 2400 at c32 (v0.5.21)', `the issue's number is the claim: ${pe && pe.ins.claim}`);
+    const noNumber = await run({ mode: 'issue', task: 'i' }, perfTriage);
+    check(noNumber.result.status === 'blocked' && noNumber.result.stopped_at === 'Reproduce', `no number to restore: ${noNumber.result.status}`);
   }],
   ['ci: infrastructure is handed over', async () => {
     const r = await run({ mode: 'ci', task: 'tracker #45847 cluster NIXL' }, {
@@ -423,6 +517,57 @@ const scenarios = [
     check(lane.apply_to_original === 'false' && lane.gpu_ids === '3' && lane.mode === 'optimize' && lane.budget === '6', 'lane never writes into the framework; GPUs, mode, budget passed');
     check(col && col.ins.backend_result.agent_timeline === undefined, 'back-end result trimmed before the liaison sees it');
     check(r.result.done.map((d) => d.wp).includes('K-K-WP1'), 'integration package verified by the test engineer');
+  }],
+  ['kernel: an integrated kernel that fails Verify goes back to the functional kernel and is retried once with the failing case', async () => {
+    const r = await run({ mode: 'feature', task: 't', kernel_backend: 'geak', kernel_backend_dir: FAKE_GEAK, gpu_ids: '3' }, {
+      ...withKernelHandoff('decode hot path'),
+      'verify_engineer:verify': (ins, n) => (n === 1 ? { all_pass: false, failures: [{ gate: 'G3' }] } : { all_pass: true, failures: [] }),
+      'investigator:investigate': () => ({ verdict: 'kernel_regression', kernel_handoffs: ['K-WP1'],
+        counterexample: 'G3 needle at 128k: wrong token at step 7, bf16, TP4', summary: 'goes away with K-K-WP1 reverted' }),
+    });
+    check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
+    const inv = r.calls.find((c) => c.key === 'investigator:investigate');
+    const ik = inv ? inv.ins.integrated_kernels : [];
+    check(ik.length === 1 && ik[0].handoff === 'K-WP1' && ik[0].commit === 'c_K-K-WP1', `the investigator sees the integrated kernel: ${JSON.stringify(ik)}`);
+    const revert = r.calls.find((c) => c.key === 'implementer:rollback');
+    check(revert && revert.ins.revert === 'c_K-K-WP1', `only the kernel's commit is reverted: ${revert && revert.ins.revert}`);
+    const packages = r.calls.filter((c) => c.key === 'kernel_liaison:package');
+    check(packages.length === 2 && String(packages[1].ins.handoff.counterexamples).includes('needle'), 'the retry carries the failing case');
+    const h = r.result.handoffs[0];
+    check(h.status === 'integrated' && h.retries === 1, `handoff ${JSON.stringify(h)}`);
+    check(r.keys.filter((k) => k === 'verify_engineer:verify').length === 2, 'verified again after the retry');
+  }],
+  ['kernel: a kernel that fails Verify again after its retry is rejected; the functional kernel stays', async () => {
+    const r = await run({ mode: 'feature', task: 't', kernel_backend: 'geak', kernel_backend_dir: FAKE_GEAK, gpu_ids: '3' }, {
+      ...withKernelHandoff('decode hot path'),
+      'verify_engineer:verify': (ins, n) => (n <= 2 ? { all_pass: false, failures: [{ gate: 'G3' }] } : { all_pass: true, failures: [] }),
+      'investigator:investigate': () => ({ verdict: 'kernel_regression', kernel_handoffs: ['K-WP1'], counterexample: 'G3 needle at 128k' }),
+    });
+    check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
+    const h = r.result.handoffs[0];
+    check(h.status === 'rejected' && h.counterexamples.length === 2, `handoff ${JSON.stringify(h)}`);
+    check(r.keys.filter((k) => k === 'kernel_liaison:package').length === 2, 'one retry only');
+    check(r.keys.filter((k) => k === 'implementer:rollback').length === 2 && !r.result.done.some((d) => d.wp === 'K-K-WP1'),
+      'both integrations reverted; the functional kernel stays');
+  }],
+  ['kernel: a kernel_regression that names no integrated kernel stops', async () => {
+    const r = await run({ mode: 'feature', task: 't' }, {
+      'verify_engineer:verify': () => ({ all_pass: false, failures: [{ gate: 'G2' }] }),
+      'investigator:investigate': () => ({ verdict: 'kernel_regression', kernel_handoffs: ['K-X'], counterexample: 'c' }),
+    });
+    check(r.result.status === 'blocked' && r.result.stopped_at === 'Verify', `status ${r.result.status}`);
+    check(!r.keys.includes('implementer:rollback'), 'nothing reverted');
+  }],
+  ['kernel: a hand-off raised by a fix reaches the Kernel phase', async () => {
+    const r = await run({ mode: 'feature', task: 't' }, {
+      'verify_engineer:verify': (ins, n) => (n === 1 ? { all_pass: false, failures: [{ gate: 'G2' }] } : { all_pass: true, failures: [] }),
+      'investigator:investigate': () => ({ verdict: 'fix_needed', work_packages: [WP('FIX1', { kind: 'kernel' })] }),
+      'implementer:implement': (ins) => ({ wp: ins.work_package.id, status: 'done', commit: `c_${ins.work_package.id}`, unit_test_cmd: 'pytest -q t.py',
+        kernel_handoff: ins.work_package.id === 'FIX1' ? { op_spec_path: `${RUN}/handoffs/K-FIX1/op_spec.md`, reason: 'the fixed kernel is slow' } : null }),
+    });
+    check(r.result.status === 'ready_for_review', `status ${r.result.status}`);
+    const h = r.result.handoffs.find((x) => x.id === 'K-FIX1');
+    check(h && h.status === 'recorded', `the fix's hand-off reached the Kernel phase: ${JSON.stringify(h)}`);
   }],
   ['kernel: a failing back end does not block the task', async () => {
     const r = await run({ mode: 'feature', task: 't', kernel_backend: 'geak', kernel_backend_dir: FAKE_GEAK }, withKernelHandoff('FAIL'));

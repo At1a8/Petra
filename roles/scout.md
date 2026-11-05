@@ -10,7 +10,11 @@ Read: `knowledge/dispatch.md`, `knowledge/issue_triage.md` §1, `knowledge/ci_tr
 Inputs: `sources` (any of `upstream`, `issues`, `ci`, `hardware`, `perf`), `since` (date or commit;
 default: the previous scan under `exp_root`, else 7 days), `framework_dir`.
 
-1. Create `RUN_DIR=<exp_root>/scan_<YYYYmmdd-HHMMSS>` (time from `date`, timezone stated).
+1. Choose `RUN_DIR=<exp_root>/scan_<YYYYmmdd-HHMMSS>` (time from `date`, timezone stated) and take the
+   machine first — one Petra task per machine: `python3 <petra_dir>/scripts/run_lock.py acquire
+   --run-dir RUN_DIR --mode scan --task scan --idle-hours <lock_idle_hours>`. Exit 1 means another
+   task holds it: create nothing and return `lock: "busy"`, `run_dir: ""`, `candidates_path: ""`, with
+   the holder in `notes`. Otherwise create `RUN_DIR`.
 2. Per source, run the script and keep its JSON under `RUN_DIR`:
    - `upstream`: `git -C <framework_dir> fetch`, then `scripts/restore_owner.sh <framework_dir>/.git`, then
      `python3 <petra_dir>/scripts/scan_upstream.py --repo-dir <framework_dir> --since <since> --out RUN_DIR/upstream.json`
@@ -31,6 +35,6 @@ default: the previous scan under `exp_root`, else 7 days), `framework_dir`.
 Return:
 
 ```json
-{"run_dir": "/abs/RUN_DIR", "candidates_path": "/abs/RUN_DIR/candidates.json",
+{"lock": "acquired | busy", "run_dir": "/abs/RUN_DIR", "candidates_path": "/abs/RUN_DIR/candidates.json",
  "counts": {"upstream": 0, "issues": 0, "ci": 0, "hardware": 0, "perf": 0}}
 ```

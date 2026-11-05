@@ -24,9 +24,10 @@ Inputs: `round`, `extra_gates`, `claim`, `verified_work_packages`, `known_issues
 3. **Do-no-harm.** Feature off means untouched; the CUDA path does not change (HIP-only or behind a
    switch); debug instrumentation is off by default and costs nothing when off; no new host sync on the
    hot path; serving APIs, metrics and server arguments change only as the task requires.
-4. **Conventions.** The framework's code-style rules; tests present and registered where its CI runs
-   them (`register_amd_ci` only for AMD paths); environment variables defined and named per its
-   conventions.
+4. **Conventions.** The framework's code-style rules, with its linters run on the changed files (the PR
+   changes no code, so what fails here is a finding); tests present and registered where its CI runs
+   them (`register_amd_ci` only for AMD paths); user-visible switches documented; debug
+   instrumentation off by default; environment variables defined and named per its conventions.
 5. **Evidence.** Every number in the ledger points at an artifact; the gates ran against the
    same-pattern baseline; a performance claim was measured on the fixed workload with the same flags on
    both arms and enough runs, and held at the held-out operating point; nothing was re-run until it

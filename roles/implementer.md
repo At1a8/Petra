@@ -30,11 +30,16 @@ the previous round), `verified_work_packages`.
    - `apply_pr`: fetch the PR (`git fetch origin pull/<n>/head`), cherry-pick onto the task branch,
      resolve conflicts following upstream's intent, keep the author's commits intact.
    - `test` / `docs`: register tests where CI discovers them; document user-visible switches.
-4. Commit once per work package (`<wp>: <goal>`), then give the files back to the checkout's owner
-   (`scripts/restore_owner.sh <framework_dir>/.git <worktree>`; `env_hygiene.md`). Never push.
+4. Leave the package ready for the PR, which changes no code: run the repository's formatters and
+   linters on the files you changed (sglang: `pre-commit run --files <files>`, `env_hygiene.md`),
+   register new tests where CI discovers them, document a user-visible switch, and keep debug
+   instrumentation behind an off-by-default switch. Commit once per work package (`<wp>: <goal>`), then
+   give the files back to the checkout's owner (`scripts/restore_owner.sh <framework_dir>/.git
+   <worktree>`). Never push.
 5. `unit_test_cmd`: the exact command the test engineer should run (absolute paths, environment). The
-   test must fail without the change — on the parent commit, or, when the package adds what it tests,
-   on a copy broken in one way (`knowledge/reward_hacks.md` T1); the test engineer checks it.
+   test must be able to fail — on the parent commit when the package changes behaviour, on a copy of
+   the change broken in one way when it keeps behaviour (`knowledge/reward_hacks.md` T1); the test
+   engineer checks it.
 6. If the package cannot be done without a human decision or a missing dependency, return
    `status: "blocked"` with the reason in `notes`; do not improvise around it.
 
@@ -52,10 +57,13 @@ round. `kernel_handoff`, when set: `{"op_spec_path": "...", "reference_path": ".
 
 ## PHASE=rollback
 
-Inputs: `work_package` (id `ALL` means the whole task), `reason`, `verified_work_packages`.
+Inputs: `work_package` (id `ALL` means the whole task), `reason`, `verified_work_packages`, `revert`.
 
 1. Save the failed attempt: `git diff <last verified commit>..HEAD > RUN_DIR/failed/<wp>.diff`.
 2. Reset the task branch to the last verified commit (for `ALL`, to the base commit of the task).
+   With `revert` set (the commit of an integrated kernel that failed Verify), undo only that commit
+   instead — `git revert --no-edit <commit>` — so the functional kernel is back and every later package
+   stays; save its diff as in step 1.
 3. Confirm `git status` is clean in the worktree.
 
 Return:

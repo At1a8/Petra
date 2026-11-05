@@ -15,15 +15,19 @@ Inputs: `work_package`, `commit`, `unit_test_cmd`.
    clean.
 2. Run `unit_test_cmd` in a fresh process. For kernels also run the self-check mode and every template
    instantiation the design lists. Repeat a GPU test that passed once only if it is timing-sensitive.
-3. **The test must fail without the change (T1).** In a throwaway worktree under `RUN_DIR`
-   (`git worktree add RUN_DIR/t1-<wp> <commit>^`), run the same test, with the worktree path in the
-   command replaced, against the parent commit: it must fail there. When the parent cannot run it
-   because the package adds what it tests (a new module, kernel or API), check out `<commit>` there
-   instead and break the change in one way that matters (skip a step, return the input unchanged,
-   shift an index, zero one output tile): the test must fail on that copy. Remove the worktree
-   (`git worktree remove`) and give `.git` back (`scripts/restore_owner.sh`). `fails_without_change`:
-   `parent` or `mutant` when the test failed there, `no` when it passed (the package fails; say in
-   `failure_summary` what the test misses), `n/a` only for a `docs` package.
+3. **The test must be able to fail (T1).** Prove it in a throwaway worktree under `RUN_DIR`, with the
+   worktree path in the command replaced:
+   - a package that **changes behaviour** (a feature, a fix): check out the parent
+     (`git worktree add RUN_DIR/t1-<wp> <commit>^`), bring in the test files the package adds, and run
+     the test against the old code: it must fail;
+   - a package that **keeps behaviour** (a performance change, a kernel swap, a refactor, tests of
+     existing code): the parent passes too, so check out `<commit>` and break the change in one way that
+     matters (skip a step, return the input unchanged, shift an index, zero one output tile): the test
+     must fail on that copy. Use this check too when the parent cannot run the test at all.
+   Remove the worktree (`git worktree remove`) and give `.git` back (`scripts/restore_owner.sh`).
+   `fails_without_change`: `parent` or `mutant` by the check that failed, `no` when the test passed
+   where it should have failed (the package fails; say in `failure_summary` what the test misses),
+   `n/a` only for a `docs` package.
 4. **Feature off (G0 slice):** with the feature switch off, run the existing tests of the modules the
    package touched and, when the package touches the serving path, a short server smoke compared with
    the baseline in the ledger. Behaviour must be unchanged.

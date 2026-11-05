@@ -32,7 +32,7 @@ kernel 级的工作——调优 Petra 为某个特性写的 kernel，或者 kern
 | `geak` | 由 GEAK 的 `kernel_workflow/kernel_lane.js` 从 `kernel_backend_dir` 指定的 GEAK checkout 运行（嵌套一层，与 GEAK 的 e2e_workflow 做法相同） |
 | `command` | 由 `kernel_backend_command` 指定的任意其他命令行工具运行 |
 
-收益会以工作包的形式回来：由 implementer 集成，再由 Petra 自己的门禁评判。后端失败或者没有找到收益，都不会阻塞任务。
+收益会以工作包的形式回来：由 implementer 集成，再由 Petra 自己的门禁评判。后端失败或者没有找到收益，都不会阻塞任务。集成后的 kernel 如果在 Verify 失败，会先退回功能版 kernel，再带着这个失败用例作为新增测试交给后端重跑一次；只有通过了，才会再次集成。
 
 ## 角色
 
@@ -53,14 +53,14 @@ kernel 级的工作——调优 Petra 为某个特性写的 kernel，或者 kern
 | `architect` | Design、Plan | 把 recon 或 profile 的结果拆成可以单独测试的工作包，附上不变量、显存预算、同步方式、启动时的拒绝条件和测试计划；标出必须由人审阅的设计；把每个性能机会分配给 Petra、kernel 后端或 Hyperloom |
 | `issue_triager` | Triage、Reproduce | 根据 issue、评论和关联 PR 确定优先级和处理方式；起草回复；写出作为该 issue 门禁的复现步骤 |
 | `ci_guardian` | Classify、Bisect | 给变红的 job 分类（代码回归、依赖升级、测试缺陷、偶发、基础设施），后两类移交出去；找到并确认引入问题的 commit，规划修复 |
-| `implementer` | Implement | 一次一个工作包，diff 尽量小，关闭特性时行为不变，只影响 HIP 或放在开关后面；编写带单元测试的功能性 kernel（调优走 hand-off）；应用现成的 PR 和验证过的 kernel 收益；回滚失败的工作包 |
-| `test_engineer` | Implement | 在每个工作包的 commit 上重新运行它的单元测试，检查这个测试在没有该改动时会失败（在父 commit 或故意改坏的副本上），并检查关闭特性时行为不变 |
+| `implementer` | Implement | 一次一个工作包，diff 尽量小，关闭特性时行为不变，只影响 HIP 或放在开关后面，提交时已通过 lint、测试已注册；编写带单元测试的功能性 kernel（调优走 hand-off）；应用现成的 PR 和验证过的 kernel 收益；回滚失败的工作包 |
+| `test_engineer` | Implement | 在每个工作包的 commit 上重新运行它的单元测试，检查这个测试确实可能失败（改变行为的改动在父 commit 上验证，不改变行为的改动在故意改坏的副本上验证），并检查关闭特性时行为不变 |
 | `verify_engineer` | Verify | 在全新启动的服务上对照同模式基线运行正确性门禁（G0、G2–G4、组合性、模式专属门禁），对每个失败分类计数 |
 | `investigator` | Investigate、Diagnose | 先跑对照实验，再一次只验证一个机制，并维护假设台账；返回修复工作包、基线同样存在的已知问题、无法定论的结论，或者（对 issue 而言）不在 AMD 这一侧的根因；探测代码只放在开关后面 |
 | `perf_engineer` | Profile、Performance | 先确认运行走了预期的路径，再把稳态 trace 整理成固定的表格（kernel、重叠、融合模式、层）、指标和带上限的优化机会；在固定负载上以同等预算评估改动，对照噪声、守护负载和 held-out 工作点，并逐项检查已知的测量类 hack |
 | `reviewer` | Review | 像维护者一样阅读 diff 和证据，以已知 reward hack 目录为起点：shape、dtype、并行布局、graph、回退路径、不造成损害、框架的惯例、公平的基准测试；要求的修改，以及为每个确认的 hack 写的测试，以工作包形式返回；可以换用另一个模型（`review_model`） |
 | `kernel_liaison` | Kernel | 把 kernel hand-off 转成后端的任务，运行 `command` 类后端，依据后端自身的验证评判结果，并把收益作为工作包返回 |
-| `pr_engineer` | PR | 代码整洁、lint、CI 注册、每个工作包一个 commit、试合并 main、在最终 commit 上检查关闭特性时的行为，写 PR 描述和 push 命令 |
+| `pr_engineer` | PR | 不改任何代码：检查代码整洁、lint 和 CI 注册（缺什么就作为工作包退回），在不改变代码内容的前提下整理成每个工作包一个 commit，试合并 main 只用来报告冲突，在最终 commit 上检查关闭特性时的行为，写 PR 描述和 push 命令 |
 | `curator` | Report | 把这次运行证实的内容写进 `knowledge/`（已知问题、特性 skill、CUDA → AMD 对照条目、新发现的 reward hack、方法经验），每个数字都能追溯到这次运行 |
 
 ## 安装
@@ -97,7 +97,7 @@ tmux new -s petra                # 一次运行要几个小时；连接断开后
 ~/Petra/scripts/run_docker.sh    # NAME 默认是你的用户名
 ```
 
-[`scripts/run_docker.sh`](scripts/run_docker.sh) 就是常见的 ROCm `run_docker.sh`：一个带 GPU 的特权容器，以相同路径挂载 `/home` 和存在的数据目录（`/data`、`/mnt` 等），并打开一个 root shell。
+[`scripts/run_docker.sh`](scripts/run_docker.sh) 就是常见的 ROCm `run_docker.sh`：一个带 GPU 的特权容器，以相同路径挂载 `/home` 和存在的数据目录（`/data`、`/mnt` 等），并打开一个 root shell。和很多同类脚本不同，它默认不挂载宿主机的 Docker socket（`DOCKER_SOCKET=1` 才挂）：Petra 的 agent 以 root 身份、自动批准权限运行，挂上 socket 就能操作宿主机上的所有容器。
 
 - **镜像。** 任务要在最新的 sglang 上测试，所以默认使用 ROCm 10、MI35x 下最新的每日 `rocm/sgl-dev` 镜像（[`scripts/latest_image.py`](scripts/latest_image.py)，例如 `v0.5.23-rocm10-mi35x-20261103`；同一页面上的 `miles` 镜像用于强化学习，会被跳过）。每天的新镜像在第一次使用时拉取，约 43 GB。MI30x 设置 `IMAGE_VARIANT=rocm10-mi30x`；要固定镜像，设置 `IMAGE=rocm/sgl-dev:<tag>`。
 - **测的是哪份代码。** 镜像提供 PyTorch、aiter、sgl-kernel 以及它自带的一份 sglang。Petra 测试的是任务 worktree 里的代码（从当前上游 main 创建），方法是把它放在 `PYTHONPATH` 最前面；运行记录会写下镜像、镜像里 sglang 的版本和 worktree 的基础 commit。
@@ -164,7 +164,7 @@ decode 太慢，帮我优化；我的 sglang 在 /home/<you>/sglang"
 
 ### 5. 运行结束后（宿主机）
 
-每次运行都把报告留在 `/home/<you>/Petra/exp/` 下它自己的运行目录里（PR 准备好时是 `validation_report.md`，其他结局是 `report.md`；运行结果中的 `report_path` 给出路径），旁边就是任务的 worktree 和分支，root 写在那里的文件已经还给你。Petra 从不 push：报告里列出了 PR 描述和确切的 `git -C <worktree> push ...` 命令。请在宿主机上执行它，你的 git 凭据在那里。
+过了 Setup 的运行会把报告留在 `/home/<you>/Petra/exp/` 下它自己的运行目录里（PR 准备好时是 `validation_report.md`，其他结局是 `report.md`；运行结果中的 `report_path` 给出路径），旁边就是任务的 worktree 和分支，root 写在那里的文件已经还给你。Petra 从不 push：报告里列出了 PR 描述和确切的 `git -C <worktree> push ...` 命令。请在宿主机上执行它，你的 git 凭据在那里。
 
 ### 重复执行与选项
 
@@ -174,6 +174,8 @@ decode 太慢，帮我优化；我的 sglang 在 /home/<you>/sglang"
 |---|---|---|
 | `IMAGE` | `scripts/run_docker.sh` | `IMAGE_VARIANT` 下最新的每日 `rocm/sgl-dev` 镜像（访问不了 Docker Hub 时用本地最新的） |
 | `IMAGE_VARIANT`、`NAME`、`EXTRA_MOUNTS` | `scripts/run_docker.sh` | `rocm10-mi35x`；你的用户名；额外要挂载的目录，用空格分隔 |
+| `DOCKER_SOCKET` | `scripts/run_docker.sh` | 不设置；设为 `1` 时额外挂载宿主机的 Docker socket 和 `docker` |
+| `PETRA_LOCK_FILE` | `scripts/run_lock.py` | `/dev/shm/petra-run.lock`，这台机器"一个任务"的锁 |
 | `PETRA_HOME` | bootstrap | `./Petra`，或你所在的 checkout |
 | `PETRA_REPO_URL`、`PETRA_REF` | bootstrap | `https://github.com/At1a8/Petra.git`，它的默认分支 |
 | `CLAUDE_VERSION`、`CLAUDE_BIN_DIR` | bootstrap | `latest`，`~/.local/bin` |
@@ -200,7 +202,7 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `goal` | 什么算完成；可以测量的模式要写成可测量的；spec 和性能计划都要回应它 |
 | `framework_dir` | 框架的 checkout；Petra 在它的 worktree 里工作（`scan` 以外必填） |
 | `model_path` | 基线和各项门禁运行的模型（`feature` 和 `perf` 必填） |
-| `framework`、`platform`、`gpu_ids` | 目标与环境（`sglang`；`gpu_ids` 为空时由 Setup 挑选空闲的 GPU） |
+| `framework`、`platform`、`gpu_ids` | 目标与环境（`sglang`；`gpu_ids` 为空时由 Setup 挑选空闲的 GPU，之后每个角色都通过 `HIP_VISIBLE_DEVICES` 使用这组 GPU） |
 | `workload` | 每次测量都使用的基准负载，例如 `{"isl":8192,"osl":1024,"conc":64}`；`perf` 必填，在 Setup 时固定 |
 | `container` | 只在 Petra 运行在宿主机上时使用：框架所在的容器，通过 `docker exec` 访问 |
 | `exp_root` | 运行目录放在哪里（默认 `<petra_dir>/exp`） |
@@ -210,14 +212,22 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `kernel_budget` | kernel 后端的优化轮数（默认 6） |
 | `apply_prs` | `perf`：要应用并做 A/B 的候选 PR |
 | `sources`、`since` | `scan`：`upstream`、`issues`、`ci`、`hardware`、`perf` 中的任意几个；时间窗口的起点 |
-| `stop_after` | 在指定阶段之后停下（例如 `Design`） |
+| `stop_after` | 在该模式的指定阶段之后停下（例如 `Design`、`Reproduce`）；填了该模式没有的阶段，会作为问题返回 |
 | `resume_from`、`run_dir` | `feature`：人审阅通过 `design.md` 后，用 `implement` 继续一个停在 Design 的运行 |
 | `review_model` | reviewer 使用的模型，随它的 agent 调用一起传入（GEAK 运行时支持按调用指定模型；其他运行时视其能力而定） |
-| `max_fix_rounds`、`max_investigate_rounds`、`max_review_rounds`、`max_work_packages`、`agent_retries`、`agent_timeout_ms` | 预算 |
+| `max_fix_rounds`、`max_investigate_rounds`、`max_review_rounds`、`max_work_packages` | 预算 |
+| `agent_retries`、`agent_timeout_ms` | agent 调用出错时会重试（重试前先检查失败的那次留下了什么），超时则不重试：超时的 agent 可能还在运行，会被记入报告里的待人工处理清单。默认超时 3 小时，verify engineer、performance engineer 和 investigator 为 6 小时 |
 
 除 `petra_dir`、`request`、`answers`、`exp_root`、`review_model` 和各项预算外，其余参数都属于任务定义；每次已启动的运行，其结果都会记录所用的任务定义（`task_def`）、每个字段的来源（`provenance`）以及 intake 的假设（`assumptions`）。
 
-人工检查点：Intake 的提问（`needs_input`）；任何 `stop_after`；L3 任务和 architect 标记的设计会停在 Design（`awaiting_design_review`）；被 reviewer 标为 `blocked` 的审阅会在 PR 之前停下；PR engineer 只返回确切的 `git push` 而不执行；issue 回复是运行目录里的草稿。无论结局如何，每次运行都以一份报告结束。
+人工检查点：Intake 的提问（`needs_input`）；任何 `stop_after`；L3 任务和 architect 标记的设计会停在 Design（`awaiting_design_review`）；被 reviewer 标为 `blocked` 的审阅会在 PR 之前停下；PR engineer 只返回确切的 `git push` 而不执行；issue 回复是运行目录里的草稿。只要建好了运行目录，无论结局如何，运行都会以一份报告结束；停在 Intake（提问或拒绝），或在 Setup 建目录之前就结束的运行（`busy`），只返回运行结果。
+
+**一台机器一个任务。** 运行在创建任何东西之前先占住这台机器：锁放在 `/dev/shm`，所有用 `--ipc=host` 启动的容器都和宿主机共用它，其他机器看不到；运行在写完报告后释放。另一个任务占着机器时，新的运行会立即以 `busy` 结束，并说明是谁占着。如果持有锁的运行已经结束，或者在两倍于最长 agent 调用的时间里（默认 12 小时）没往运行目录写过任何东西，下一个运行会直接接管；意外中断的运行留下的锁可以立即释放：
+
+```bash
+python3 scripts/run_lock.py status            # 谁占着这台机器
+python3 scripts/run_lock.py release --force   # 那个运行已经中断时，强制释放
+```
 
 框架自带的 skill（sglang 的 `.agents/skills/`）以引用方式使用，从不复制：每个角色从任务 worktree 中读取 [`knowledge/frameworks/sglang/skills.md`](knowledge/frameworks/sglang/skills.md) 为它列出的 skill，因此与它正在修改的代码版本一致；ROCm 上的差异见 [`knowledge/platforms/rocm_skills.md`](knowledge/platforms/rocm_skills.md)。
 
@@ -233,7 +243,7 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `scripts/audit_platform_gates.py` | 换到新架构时需要重新检查的平台门控（在 gfx1250 上为真的能力判断、wave32 假设） |
 | `scripts/audit_host_syncs.py` | 热路径上的 host-device 同步和拷贝候选点（供 profile 参考的线索） |
 
-`scripts/restore_owner.sh`（POSIX sh）把 root 在容器里写下的文件还给所在 checkout 的属主；每个 agent 在 git 写操作之后都会运行它（[`knowledge/env_hygiene.md`](knowledge/env_hygiene.md)）。`scripts/check_framework_skills.py --framework-dir <dir>` 拿 skill 索引和框架 checkout 对照：索引里提到但已经不存在的 skill，以及索引还没收录的新 skill（scout 每次 scan 都会运行它）。`scripts/latest_image.py [--variant rocm10-mi30x]` 输出最新的每日 sglang 镜像（`run_docker.sh` 从它启动；director 拿运行所用的镜像和它比较）。
+`scripts/restore_owner.sh`（POSIX sh）把 root 在容器里写下的文件还给所在 checkout 的属主；每个 agent 在 git 写操作之后都会运行它（[`knowledge/env_hygiene.md`](knowledge/env_hygiene.md)）。`scripts/check_framework_skills.py --framework-dir <dir>` 拿 skill 索引和框架 checkout 对照：索引里提到但已经不存在的 skill，以及索引还没收录的新 skill（scout 每次 scan 都会运行它）。`scripts/latest_image.py [--variant rocm10-mi30x]` 输出最新的每日 sglang 镜像（`run_docker.sh` 从它启动；director 拿运行所用的镜像和它比较）。`scripts/run_lock.py` 保证一台机器同时只跑一个 Petra 任务（`acquire`、`release`、`status`）。
 
 ## 测试
 
@@ -261,7 +271,8 @@ Petra/
 │   └── feature_skills/      # 按特性整理的已验证方案（首个是 hisparse-v2）
 ├── templates/               # task_definition, feature_spec, design, experiment_ledger, validation_report,
 │                            # pr_body, issue_triage, ci_triage, perf_analysis, task_queue
-├── scripts/                 # 任务收集、审计、run_docker.sh、latest_image.py、restore_owner.sh
+├── scripts/                 # 任务收集、审计、run_docker.sh、latest_image.py、run_lock.py、
+│                            # restore_owner.sh
 ├── petra/bootstrap.py       # 安装第 3 步，在容器内运行；可以重复执行
 ├── setup.py, pyproject.toml # 打包；pip 构建 wheel 时 setup.py 会运行 bootstrap
 ├── tests/                   # petra.js 的 dry run，脚本、bootstrap 和 README 的单元测试

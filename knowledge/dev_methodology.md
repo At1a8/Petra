@@ -88,12 +88,13 @@ practice. Artifacts live in the run's working directory; the templates are in `.
 
 ### 4. Implement — one work package at a time
 
-- Implement a WP, run its unit test, run the feature-off check, commit. Then the next WP.
+- Implement a WP, run its unit test, run the feature-off check, lint the changed files, commit. Then
+  the next WP. Each commit is ready for the PR, which changes no code.
 - New kernels: standalone unit test against a reference implementation, covering every template
   instantiation the integration will use, plus a self-check mode that re-reads written data.
 - Debug instrumentation: behind environment switches, off by default, never on a hot path when off.
 - **Artifact:** one commit per WP; unit test results in the ledger.
-- **Gate:** unit tests pass; feature-off behaviour unchanged.
+- **Gate:** unit tests pass and can fail (`reward_hacks.md` T1); feature-off behaviour unchanged.
 
 ### 5. Integrate & verify
 
@@ -123,11 +124,14 @@ practice. Artifacts live in the run's working directory; the templates are in `.
 
 ### 8. Hygiene & PR
 
-- Remove or gate debug code, run the formatters and linters the target repo enforces, register tests,
-  update docs, sync with upstream, write the PR description from the report (`pr_playbook.md`).
+- Hygiene happens in Implement: each work package is committed lint-clean, with its tests registered,
+  its switch documented and debug code off by default. This phase checks it and changes no code: gaps
+  go back as work packages through Implement, Verify and Review; a trial merge of main reports
+  conflicts without updating the branch; the PR description is written from the report
+  (`pr_playbook.md`).
 - **Artifact:** clean commits, `pr_body.md`.
-- **Gate:** lint passes locally; feature-off check passes on the final commit; the PR description cites
-  the validation artifacts.
+- **Gate:** lint passes; the branch's tree is the one that was verified; feature-off check passes on the
+  final commit; the PR description cites the validation artifacts.
 
 ### 9. Report & learn
 

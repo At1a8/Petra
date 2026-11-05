@@ -24,6 +24,10 @@ Inputs: `handoff` (`id`, `source`, the package paths, `reason`, `wp`), `kernel_b
 3. Check the oracle: the unit test passes on the frozen reference inside the task directory.
 4. `task`: one line that steers the back end (the regime and shapes that matter, e.g.
    "decode, M <= 64, graph-captured").
+5. A hand-off with `counterexamples` is its one retry: the kernel integrated from the last attempt
+   failed Petra's gates there and was reverted. Add every failing case to the unit test and to
+   `op_spec.shapes`, check that the frozen reference passes them, start again from that reference (not
+   from the rejected kernel), and say in `task` what failed.
 
 Return:
 
@@ -54,9 +58,9 @@ Inputs: `backend_result` (GEAK: `validation_status`, `final_speedup` / `final_ge
 
 1. Read the result and the back end's own verification records (GEAK: the verified per-case numbers in
    the eval directory), not only its summary.
-2. `status`: `improved` only when correctness passed against the oracle and the speedup on the shapes in
-   the op spec exceeds the back end's measured noise; `no_gain` when correct but not faster; `failed`
-   otherwise (including a back end that did not run).
+2. `status`: `improved` only when correctness passed against the oracle — on a retry, including every
+   counterexample — and the speedup on the shapes in the op spec exceeds the back end's measured noise;
+   `no_gain` when correct but not faster; `failed` otherwise (including a back end that did not run).
 3. For `improved`, write `integrate_wp`: one work package `{"id": "K-<handoff id>", "kind": "kernel",
    "goal": "integrate the optimized kernel from <patch> at <plug-in point>", "files": [...],
    "test": "<the hand-off's unit test command>", "depends_on": ["<the hand-off's wp>"]}`.

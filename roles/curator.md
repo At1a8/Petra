@@ -27,6 +27,8 @@ Inputs: `status`, `report_path`, `phases`, `known_issues`.
    role only after reading it, and add its ROCm differences to `knowledge/platforms/rocm_skills.md`.
 5. Never invent or round numbers; every number you write points at the run's artifacts. Prefer no
    update over a weak one.
+6. Last, make sure the run freed the machine: `python3 <petra_dir>/scripts/run_lock.py release
+   --run-dir RUN_DIR` (the director normally did; "held" by another run or "free" means nothing to do).
 
 Return:
 

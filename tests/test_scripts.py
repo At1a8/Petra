@@ -2,11 +2,14 @@
 
     python3 -m unittest discover -s tests -p 'test_*.py'
 """
+import io
 import json
+import os
 import sys
 import tempfile
 import textwrap
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -16,6 +19,7 @@ import audit_host_syncs  # noqa: E402
 import audit_platform_gates  # noqa: E402
 import check_framework_skills  # noqa: E402
 import latest_image  # noqa: E402
+import run_lock  # noqa: E402
 import scan_ci  # noqa: E402
 import scan_issues  # noqa: E402
 import scan_upstream  # noqa: E402
@@ -71,6 +75,56 @@ class LatestImageTest(unittest.TestCase):
         self.assertIsNone(latest_image.daily_key("v0.5.23-rocm10-mi35xx-20261103", "rocm10-mi35x"))
         self.assertEqual(latest_image.daily_key("v0.5.22.post1-rocm10-mi35x-20261103", "rocm10-mi35x"),
                          ("20261103", (0, 5, 22)))
+
+
+class RunLockTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.lock = str(self.root / "petra-run.lock")
+        self.a, self.b = str(self.root / "run_a"), str(self.root / "run_b")
+        Path(self.a).mkdir()
+
+    def test_one_task_at_a_time(self):
+        self.assertEqual(run_lock.status(self.lock)["status"], "free")
+        self.assertEqual(run_lock.acquire(self.lock, self.a, "issue 41299", "issue")["status"], "acquired")
+        self.assertEqual(run_lock.acquire(self.lock, self.a)["status"], "acquired")  # a retry of the same run
+        busy = run_lock.acquire(self.lock, self.b, "scan", "scan")
+        self.assertEqual((busy["status"], busy["holder"]["run_dir"], busy["holder"]["task"]), ("busy", self.a, "issue 41299"))
+        self.assertEqual(run_lock.release(self.lock, self.b)["status"], "held")
+        self.assertEqual(run_lock.release(self.lock, self.a)["status"], "released")
+        self.assertEqual(run_lock.acquire(self.lock, self.b)["status"], "acquired")
+
+    def test_a_finished_or_silent_run_is_taken_over(self):
+        t0 = 1_000_000.0
+        run_lock.acquire(self.lock, self.a, idle_hours=12, now=t0)
+        (Path(self.a) / "report.md").write_text("done")
+        os.utime(Path(self.a) / "report.md", (t0 + 60, t0 + 60))
+        took = run_lock.acquire(self.lock, self.b, now=t0 + 120)
+        self.assertEqual((took["status"], took["took_over"]["reason"]), ("acquired", "its run finished"))
+        Path(self.b).mkdir()
+        os.utime(self.b, (t0 + 120, t0 + 120))
+        self.assertEqual(run_lock.acquire(self.lock, self.a, now=t0 + 11 * 3600)["status"], "busy")
+        late = run_lock.acquire(self.lock, self.a, now=t0 + 13 * 3600)
+        self.assertEqual((late["status"], late["took_over"]["reason"]), ("acquired", "its run wrote nothing for 12 h"))
+
+    def test_an_old_report_does_not_free_a_resumed_run(self):
+        (Path(self.a) / "report.md").write_text("stopped at Design")
+        os.utime(Path(self.a) / "report.md", (1000.0, 1000.0))
+        run_lock.acquire(self.lock, self.a, now=2000.0)
+        os.utime(self.a, (2000.0, 2000.0))
+        self.assertEqual(run_lock.acquire(self.lock, self.b, now=2100.0)["status"], "busy")
+
+    def test_force_release_and_the_command_line(self):
+        run_lock.acquire(self.lock, self.a)
+        self.assertEqual(run_lock.release(self.lock, force=True)["status"], "released")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(run_lock.main(["--lock", self.lock, "acquire", "--run-dir", self.a]), 0)
+            self.assertEqual(run_lock.main(["--lock", self.lock, "acquire", "--run-dir", self.b]), 1)
+            self.assertEqual(run_lock.main(["--lock", self.lock, "status"]), 0)
+        self.assertIn('"status": "busy"', out.getvalue())
 
 
 class ScanCiTest(unittest.TestCase):
