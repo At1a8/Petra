@@ -18,7 +18,8 @@ state warns and leaves it alone.
   shell         (root in a container) no __pycache__ in the checkouts, no Claude Code self-update, the
                 keys kept on the host in ~/.petra_env, and with LLM_GATEWAY_KEY Claude Code on the AMD LLM
                 gateway
-  framework     (--framework-dir) clone the framework, with its whole history, if the directory is missing
+  framework     the image's /sgl-workspace/sglang (whole history) by default; --framework-dir names a host
+                checkout instead, cloned with its whole history if missing
   checks        git, docker (host only), ROCm, sglang, Node.js, API access, GitHub token (detect only)
 
   python3 -B -m petra.bootstrap [--framework-dir DIR]
@@ -29,7 +30,8 @@ Environment (a flag wins over its variable):
   PETRA_HOME, PETRA_REPO_URL, PETRA_REF       the checkout (default ./Petra, or the one you are in)
   CLAUDE_VERSION, CLAUDE_BIN_DIR              native-installer target (latest), its bin dir (~/.local/bin)
   CLAUDE_CONFIG_DIR                           when set, used as it is instead of ~/.petra/claude
-  PETRA_FRAMEWORK_DIR, PETRA_FRAMEWORK_REPO   --framework-dir, --framework-repo (default: sglang)
+  PETRA_FRAMEWORK_DIR, PETRA_FRAMEWORK_REPO   --framework-dir (default: the image's checkout), --framework-repo
+                                              (default: sglang)
   PETRA_SKIP_BOOTSTRAP                        set to skip everything (CI, image builds)
 
 `pip install` runs it while building the wheel. Standard library only.
@@ -63,6 +65,8 @@ CONTAINER_ENV = {"PYTHONDONTWRITEBYTECODE": "1", "DISABLE_AUTOUPDATER": "1"}
 # Ocp-Apim-Subscription-Key header alone; the same key as a bearer token only keeps Claude Code from
 # asking for a login, and the gateway ignores it.
 AMD_GATEWAY_URL = "https://llm-api.amd.com/Unified"
+# sglang images ship a full-history checkout of sglang; tasks clone their own working copy from it.
+IMAGE_SGLANG = "/sgl-workspace/sglang"
 GATEWAY_ENV = (
     'if [ -n "$LLM_GATEWAY_KEY" ] && [ -z "$ANTHROPIC_BASE_URL" ]; then\n'
     '  export ANTHROPIC_BASE_URL=%s\n'
@@ -457,15 +461,21 @@ def _repo_key(url: str) -> str:
     return u.lower()
 
 
+def image_checkout() -> str:
+    """The sglang image's own checkout, Petra's default framework source, when this is such an image."""
+    return IMAGE_SGLANG if os.path.isdir(os.path.join(IMAGE_SGLANG, ".git")) else ""
+
+
 def ensure_framework(s: dict) -> tuple[str, str]:
-    d = s["framework_dir"]
+    d = s["framework_dir"] or image_checkout()
     if not d:
-        return "skipped", "no --framework-dir"
+        return "skipped", "no --framework-dir and no image checkout"
     if os.path.exists(os.path.join(d, ".git")):
         _, head, _ = _out(["git", "-C", d, "log", "-1", "--format=%h %cs"])
         _, shallow, _ = _out(["git", "-C", d, "rev-parse", "--is-shallow-repository"])
         _, origin, _ = _out(["git", "-C", d, "remote", "get-url", "origin"])
-        log("framework: kept %s (%s)" % (d, head or "no commits"))
+        log("framework: kept %s (%s)%s" % (d, head or "no commits",
+                                          "; the image's checkout, Petra's default" if d == IMAGE_SGLANG else ""))
         if shallow == "true":
             warn("framework: %s is a shallow clone; ci bisects and the upstream scan need its history. "
                  "It is left as it is (`git -C %s fetch --unshallow` would deepen it)" % (d, d))
@@ -584,7 +594,10 @@ def next_steps(s: dict, statuses: dict, found: dict | None = None, path_env: str
             + ("  (kept in %s)" % state if state else "  (lost with the container)" if keys else ""),
         ])
     if not claude_only:
-        fw = s["framework_dir"] or "/path/to/sglang"
+        if s["framework_dir"]:
+            fw = ", framework_dir=%s" % s["framework_dir"]
+        else:
+            fw = "" if image_checkout() else ", framework_dir=/path/to/sglang"
         start = ["Start Claude Code from the checkout, permissions auto-approved (README step 4):",
                  hl("cd %s && IS_SANDBOX=1 claude --dangerously-skip-permissions" % s["home"])]
         if in_container():
@@ -596,8 +609,8 @@ def next_steps(s: dict, statuses: dict, found: dict | None = None, path_env: str
         steps.append(start)
         elsewhere = "" if in_container() else ", container=<container>"
         steps.append(["Give it a task, e.g. collect and rank tasks, or take one issue:",
-                      "use %s/petra.js with mode=scan, petra_dir=%s, framework_dir=%s" % (s["home"], s["home"], fw),
-                      "use %s/petra.js with mode=issue, task=<issue URL>, petra_dir=%s, framework_dir=%s, gpu_ids=0%s"
+                      "use %s/petra.js with mode=scan, petra_dir=%s%s" % (s["home"], s["home"], fw),
+                      "use %s/petra.js with mode=issue, task=<issue URL>, petra_dir=%s%s, gpu_ids=0%s"
                       % (s["home"], s["home"], fw, elsewhere)])
     lines = ["Next steps:"]
     for i, (head, *body) in enumerate(steps, 1):

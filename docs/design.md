@@ -119,8 +119,11 @@ time (a lock in `/dev/shm`, `scripts/run_lock.py`; a second run ends as `busy`),
 GPUs Setup pinned (through `HIP_VISIBLE_DEVICES`) and touches only the processes and containers it
 started; the host's Docker socket is not mounted by default. Tasks test the newest sglang: unless the user names an
 image or a container, the container runs the newest daily `rocm/sgl-dev` image for its ROCm and GPU
-(`scripts/latest_image.py`), and every server and test runs the task worktree's code, created from the
-current upstream main and put first on `PYTHONPATH`, never the copy of sglang installed in the image.
+(`scripts/latest_image.py`). The image's own full-history checkout, `/sgl-workspace/sglang`, is the
+default framework source: Setup fetches the current main into it without touching its working tree and
+gives each task a standalone clone of that main under the run directory, so the task's branch and
+commits live on the host and outlive the container. Every server and test runs that clone's code, put
+first on `PYTHONPATH`, never the copy of sglang installed in the image.
 
 - Gates G0–G5 (`validation_doctrine.md`), plus mode gates (`issue_repro`, `failing_test`) and the
   composability gates of every dimension a task touches.

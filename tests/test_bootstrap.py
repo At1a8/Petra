@@ -380,7 +380,22 @@ class GitTrustTest(unittest.TestCase):
 class FrameworkTest(unittest.TestCase):
     def test_skipped_without_a_dir(self):
         with tempfile.TemporaryDirectory() as d:
-            self.assertEqual(bs.ensure_framework(S(d))[0], "skipped")
+            with mock.patch.object(bs, "IMAGE_SGLANG", os.path.join(d, "no-image-checkout")), Quiet():
+                self.assertEqual(bs.ensure_framework(S(d))[0], "skipped")
+
+    def test_the_image_checkout_is_the_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            image = Path(d) / "sgl-workspace" / "sglang"
+            (image / ".git").mkdir(parents=True)
+            answers = {"log": (0, "1ced9a9 2026-11-02", ""), "rev-parse": (0, "false", ""),
+                       "remote": (0, "https://github.com/sgl-project/sglang.git", "")}
+            with mock.patch.object(bs, "IMAGE_SGLANG", str(image)), \
+                    mock.patch.object(bs, "_out", side_effect=lambda cmd: answers[cmd[3]]), \
+                    mock.patch.object(bs, "_run") as run, Quiet():
+                self.assertEqual(bs.ensure_framework(S(d)), ("kept", str(image)))
+                s = bs.settings({"PWD": d, "HOME": d})
+                self.assertNotIn("framework_dir=", bs.next_steps(s, {}, {"api": True}, path_env="/usr/bin"))
+            run.assert_not_called()
 
     def test_existing_checkout_is_kept_as_it_is(self):
         with tempfile.TemporaryDirectory() as d:

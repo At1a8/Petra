@@ -31,7 +31,7 @@ Inputs: `round` (1 after the work packages of an earlier round were made).
    `Depends on #<n>` for unmerged dependencies. When the task was to push an existing PR, write the
    verification comment for that PR instead, at the same path.
 6. **Push command:** the exact `git push` the human should run. Do not run it. First give everything
-   back to the checkout's owner (`scripts/restore_owner.sh <framework_dir>/.git <worktree>`) and check
+   back to its owner (`scripts/restore_owner.sh <worktree>`, the task's clone with its own `.git`) and check
    that nothing in `.git` is still root's (`env_hygiene.md`), so the push also works from the host.
 
 Return:

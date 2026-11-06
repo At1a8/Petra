@@ -14,8 +14,9 @@ Petra runs git inside the container, as root, on checkouts that belong to a host
   **after** updating the working tree and index but **before** moving the branch ref, leaving hundreds
   of staged changes on an old HEAD.
 - So after every git write, and before handing over a push command, give them back:
-  `<petra_dir>/scripts/restore_owner.sh <framework_dir>/.git <worktree> <run_dir>` (each path goes to
-  the owner of its closest ancestor that is not root's; nothing happens when not root).
+  `<petra_dir>/scripts/restore_owner.sh <run_dir>` — the task's clone and its `.git` live there — plus
+  the `.git` of any host checkout you fetched into (each path goes to the owner of its closest ancestor
+  that is not root's; nothing happens when not root, or for the image's own checkout).
 - Detect leftovers: `find <repo>/.git ! -user "$(stat -c %U <repo>)" | head`.
 - An update interrupted by a permission error: restore ownership, finish the ref update
   (`git update-ref refs/heads/<branch> <new> <old>`), then confirm `git status` is clean.
@@ -36,12 +37,18 @@ Petra runs git inside the container, as root, on checkouts that belong to a host
 - The image provides the runtime — PyTorch, aiter, sgl-kernel — and its own copy of the framework,
   installed in editable mode from the image's checkout (`/sgl-workspace/sglang` in `rocm/sgl-dev`). A
   plain `python -m sglang.launch_server` runs that copy, never the task's changes.
+- That checkout has the whole history and is Petra's default `framework_dir`: `git fetch` brings it the
+  current main, without touching its working tree, which stays detached at the image's commit with the
+  image's build changes. Each task works in its own clone under `RUN_DIR/wt`, seeded from it with
+  `git clone --reference <framework_dir> --dissociate <origin URL>`: a standalone repository on the
+  host, so its branch and commits outlive the container, which a worktree of the image's checkout
+  would not.
 - Run every server, test and benchmark from the worktree under test, first on `PYTHONPATH` (sglang:
   `PYTHONPATH=<worktree>/python`), and check it once per launch script:
   `python -c "import sglang; print(sglang.__file__)"` must print a path inside the worktree. Both arms
   of an A/B run from the worktree: the baseline at the base commit or with the feature off, never the
   image's copy.
-- Tasks test the newest sglang: the worktree starts from the current upstream main and, unless the user
+- Tasks test the newest sglang: the task's clone starts from the current upstream main and, unless the user
   named an image or a container, the image is the newest daily build for its ROCm and GPU
   (`scripts/latest_image.py`, which `scripts/run_docker.sh` starts from; the `miles` images are for
   reinforcement learning). Compiled packages too old for the worktree fail at import or startup: that is

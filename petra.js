@@ -10,7 +10,8 @@ export const meta = {
     'args.request (the user\'s words, any language; the Intake phase turns it into a task definition) or as the ' +
     'task-definition fields of templates/task_definition.md: args.mode (feature | issue | ci | perf | scan), ' +
     'args.task (the upstream PR or design, issue URL, CI job or tracker cluster, or performance goal), ' +
-    'args.framework_dir (the framework checkout), args.model_path (required for feature and perf), args.workload ' +
+    'args.framework_dir (the framework checkout; for sglang the image\'s /sgl-workspace/sglang by default), ' +
+    'args.model_path (required for feature and perf), args.workload ' +
     '(required for perf: the fixed benchmark every measurement uses), args.goal (what done means), args.framework ' +
     '(default sglang), args.platform, args.gpu_ids, args.container, args.apply_prs (perf), args.sources and ' +
     'args.since (scan), args.stop_after (a phase title), args.resume_from="implement" with args.run_dir (feature: ' +
@@ -23,7 +24,7 @@ export const meta = {
     'args.agent_timeout_ms.',
   phases: [
     { title: 'Intake', detail: 'intake: turn a request, or a definition with gaps, into a complete task definition; questions when something is missing' },
-    { title: 'Setup', detail: 'director: run dir, task branch and worktree, launch scripts, baseline (not in scan)' },
+    { title: 'Setup', detail: 'director: run dir, the task\'s own clone and branch, launch scripts, baseline (not in scan)' },
     { title: 'Spec', detail: 'director: feature_spec.md with measurable acceptance criteria [feature]' },
     { title: 'Recon', detail: 'analyst: code map and assumption table, gap type and level [feature]' },
     { title: 'Design', detail: 'architect: work packages, invariants, memory budget, startup rejections [feature]' },
@@ -180,7 +181,8 @@ function missingFields(a) {
   }
   if (mode !== 'scan' && !a.task) ask('task', TASK_PROMPTS[mode], 'it is the source of truth the run works from');
   if (mode !== 'scan' && !a.framework_dir) {
-    ask('framework_dir', 'Which framework checkout should Petra work in (absolute path)?', 'Setup creates the task worktree from it');
+    ask('framework_dir', 'Which framework checkout should Petra take the code from (absolute path)?',
+      'Setup clones the task\'s own working copy from it');
   }
   if ((mode === 'feature' || mode === 'perf') && !a.model_path) {
     ask('model_path', 'Which model should the baseline and the gates run (local path)?', 'Setup runs the baseline on it');
@@ -252,7 +254,11 @@ async function intakeStage(raw) {
   };
 }
 
-const START = await intakeStage(RAW);
+// sglang images carry a full-history checkout of sglang, the default framework source; each task works in
+// its own clone of it under RUN_DIR, which outlives the container.
+const IMAGE_SGLANG = '/sgl-workspace/sglang';
+const START = await intakeStage(!RAW.framework_dir && String(RAW.framework || 'sglang').trim().toLowerCase() === 'sglang'
+  ? { ...RAW, framework_dir: IMAGE_SGLANG } : RAW);
 if (START.record) return START.record;
 const A = START.args;
 const MODE = String(A.mode).trim().toLowerCase();
@@ -339,9 +345,9 @@ Framework code runs from the worktree under test, never from the copy installed 
 first on PYTHONPATH (sglang: <worktree>/python) for every server, test and benchmark.
 Use only the GPUs in gpu_ids: export HIP_VISIBLE_DEVICES=<gpu_ids> for every server, test and
 benchmark. Touch only the processes, servers and containers this run started (knowledge/guardrails.md).
-As root in the container, give back what you write into checkouts another user owns: after every git
-write and before you return, run ${PETRA}/scripts/restore_owner.sh on the framework's .git, the task
-worktree and RUN_DIR (knowledge/env_hygiene.md).`;
+As root in the container, give back what you write under /home: after every git write and before you
+return, run ${PETRA}/scripts/restore_owner.sh on RUN_DIR, which holds the task's clone and its .git
+(knowledge/env_hygiene.md).`;
   const retry = attempt > 1 ? `
 This is attempt ${attempt}: an earlier attempt of this call failed and may have left work behind —
 commits, files in RUN_DIR, servers or processes it started. Check first (git status and the last

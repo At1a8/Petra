@@ -65,7 +65,7 @@ Each phase calls a role: an agent that reads `roles/<role>.md`, does its part an
 JSON; `petra.js` holds the schemas and branches only on their required fields. Four rules hold across
 the roles:
 
-- only the **implementer** edits framework source, and only in the task's worktree;
+- only the **implementer** edits framework source, and only in the task's own clone;
 - the roles that measure (test engineer, verify engineer, performance engineer), the intake and the
   reviewer never edit framework source; the measuring ones never reuse anyone else's numbers but run
   everything again;
@@ -75,7 +75,7 @@ the roles:
 | Role | Phases | What it does |
 |---|---|---|
 | `intake` | Intake | turns a request in plain words, or a definition with gaps, into the task definition: decides the mode, fills fields with read-only checks, records defaults as assumptions, asks instead of guessing (a missing source of truth, model or workload, anything that would cost something to obtain), rejects what Petra does not do |
-| `director` | Setup, Spec, Report | creates the run directory, task branch and worktree, pins commit, image and GPUs and runs the baseline; writes the feature spec with measurable acceptance criteria; writes the final report for every outcome, with the next step for a human |
+| `director` | Setup, Spec, Report | creates the run directory and the task's own clone and branch, pins commit, image and GPUs and runs the baseline; writes the feature spec with measurable acceptance criteria; writes the final report for every outcome, with the next step for a human |
 | `scout` | Collect | gathers candidate tasks with the scripts below |
 | `dispatcher` | Dispatch | sets each candidate's gap type, level, CUDA dependencies with their AMD starting points, effort and priority, and ranks them into a queue |
 | `analyst` | Recon | maps every subsystem a feature needs to a file, function and hook in the target framework, and tables which assumptions of the source design hold on AMD; reads only |
@@ -103,13 +103,14 @@ owner ([`scripts/restore_owner.sh`](scripts/restore_owner.sh), [`knowledge/env_h
 so git on the host and your `git push` keep working.
 
 Apart from the container, which run_docker.sh replaces by design, every step can be run again: it
-checks first, keeps what is already there and adds only what is missing. Nothing is deleted,
-overwritten or re-cloned.
+checks first, keeps what is already there and adds only what is missing. In the commands,
+`check || action` runs the action only when the check fails: on a new machine every action runs, and
+a second run skips them. Nothing is deleted, overwritten or re-cloned.
 
 ### What the host needs
 
 - Linux with AMD Instinct GPUs (MI300 or MI350 series) and the ROCm driver loaded (`/dev/kfd` exists).
-- Docker you can run (your user in the `docker` group, or sudo), git, curl, python3 and tmux.
+- Docker you can run (your user in the `docker` group, or sudo), git, curl and python3.
 - Network access to claude.ai, github.com and Docker Hub, and about 45 GB of disk per sglang image.
 - An AMD LLM gateway key (`LLM_GATEWAY_KEY`), an Anthropic API key or another gateway; without any, a
   Claude subscription to log in with.
@@ -148,13 +149,16 @@ every container loads it.
   github.com, Settings → Developer settings → Personal access tokens → Fine-grained tokens, with
   *Public repositories (read-only)* access (a classic token with no scopes also works).
 
-### 2. Start the container (host)
+### 2. Get Petra and start the container (host)
 
 ```bash
-[ -d ~/Petra/.git ] || git clone https://github.com/At1a8/Petra ~/Petra
-tmux new -s petra                # a run takes hours; tmux keeps it through a dropped connection
+[ -d ~/Petra/.git ] || git clone https://github.com/At1a8/Petra ~/Petra   # skipped once ~/Petra exists
 ~/Petra/scripts/run_docker.sh    # NAME defaults to your user name
 ```
+
+The first line puts Petra's code in `~/Petra`: on a new machine there is no `~/Petra/.git` yet, so the
+clone runs; where it is already there, nothing happens. The clone brings `scripts/run_docker.sh`,
+which the second line runs; step 3 then makes the container ready to run Petra.
 
 [`scripts/run_docker.sh`](scripts/run_docker.sh) is the usual ROCm `run_docker.sh`: a privileged
 container with the GPUs, `/home` and the data directories that exist (`/data`, `/mnt`, ...) mounted at
@@ -167,22 +171,28 @@ socket would put every container on the host within their reach.
   `v0.5.23-rocm10-mi35x-20261103`; the `miles` images on the same page are for reinforcement learning
   and are skipped). A new day's image is pulled at its first use, about 43 GB. On MI30x, set
   `IMAGE_VARIANT=rocm10-mi30x`; for a fixed image, `IMAGE=rocm/sgl-dev:<tag>`.
-- **What is tested.** The image provides PyTorch, aiter, sgl-kernel and its own copy of sglang. Petra
-  tests the code of the task's worktree, created from the current upstream main, by putting it first on
-  `PYTHONPATH`; the run records the image, the image's sglang version and the worktree's base commit.
+- **What is tested.** The image provides PyTorch, aiter, sgl-kernel and its own sglang checkout,
+  `/sgl-workspace/sglang`, with the whole history: Petra's default framework source, so there is no
+  sglang to clone or name. Setup fetches the current main into it, leaving its working tree as the
+  image built it, and gives each task its own clone of that main under the run directory (borrowing the
+  checkout's objects: seconds, about 0.7 GB). The task's code runs first on `PYTHONPATH`; its clone,
+  branch and commits live on the host and outlive the container. The run records the image, the
+  image's sglang version and the task's base commit.
 - **A new container every time.** It removes the previous container of the same name first, and with
-  it anything still running there. To get back into a running container, reattach tmux
-  (`tmux attach -t petra`) or open a shell in it (`docker exec -it <name> bash`); do not run
-  run_docker.sh again. A run_docker.sh of your own works too, as long as it mounts `/home` at the same
-  path.
+  it anything still running there. To get back into a running container, open a shell in it
+  (`docker exec -it <name> bash`); do not run run_docker.sh again. A run_docker.sh of your own works
+  too, as long as it mounts `/home` at the same path.
 
 `claude` is not callable yet: the host's binary is in the container through the `/home` mount, but not
 on root's `PATH` (`claude: command not found`). Step 3 links it; nothing is installed in the container.
 
-### 3. Install Petra (inside the container, in every new container)
+### 3. Set up Petra in the container (in every new container)
+
+Petra's code is already in `~/Petra` from step 2; this step makes the new container ready to run it,
+as the table below lists.
 
 ```bash
-cd /home/<you>/Petra && python3 -B -m petra.bootstrap --framework-dir /home/<you>/sglang
+cd /home/<you>/Petra && python3 -B -m petra.bootstrap
 source ~/.bashrc
 claude --version    # the host's Claude Code
 ```
@@ -193,7 +203,7 @@ claude --version    # the host's Claude Code
 | Claude Code state | kept on the host in `/home/<you>/.petra/claude` (`CLAUDE_CONFIG_DIR`, apart from your own `~/.claude`): the first-start answers and a `/login` outlive the container |
 | git | trusts the mounted checkouts, which belong to you, not root (`safe.directory '*'`) |
 | shell | root's `~/.bashrc` gets `PYTHONDONTWRITEBYTECODE=1` (no root-owned `__pycache__` in your checkouts), `DISABLE_AUTOUPDATER=1` (the host updates Claude Code) and loads `/home/<you>/.petra_env`; with `LLM_GATEWAY_KEY` and no `ANTHROPIC_BASE_URL`, it points Claude Code at the AMD LLM gateway |
-| framework (`--framework-dir`) | an existing checkout is used as it is (a shallow one is reported, not deepened); a missing one is cloned with its whole history (`--filter=blob:none`) and given to you |
+| framework | the image's `/sgl-workspace/sglang`, Petra's default framework source, is checked and left as it is; `--framework-dir` names a host checkout instead (used as it is, or cloned with its whole history when missing) |
 | checks | GPUs, sglang, API access, `GITHUB_TOKEN`, counting what `~/.petra_env` sets (detect only) |
 
 `python3 -B` keeps this first run from writing root-owned `__pycache__` into the checkout. The command
@@ -218,8 +228,7 @@ containers skip them. Three of the defaults would stop you:
 Without a key, pick a login method instead and log in once. Then ask:
 
 ```
-use /home/<you>/Petra/petra.js with mode=scan, petra_dir=/home/<you>/Petra,
-framework_dir=/home/<you>/sglang
+use /home/<you>/Petra/petra.js with mode=scan, petra_dir=/home/<you>/Petra
 ```
 
 The scan changes no code. It collects open AMD issues, red AMD CI, CUDA-first upstream changes and
@@ -229,15 +238,14 @@ stopping after the reproduction to confirm the environment, name its fields:
 
 ```
 use /home/<you>/Petra/petra.js with mode=issue, task=https://github.com/sgl-project/sglang/issues/41299,
-petra_dir=/home/<you>/Petra, framework_dir=/home/<you>/sglang, model_path=<weights>,
-gpu_ids=0, stop_after=Reproduce
+petra_dir=/home/<you>/Petra, model_path=<weights>, gpu_ids=0, stop_after=Reproduce
 ```
 
 or say it in plain words and let the Intake phase write the definition:
 
 ```
 use /home/<you>/Petra/petra.js with petra_dir=/home/<you>/Petra, request="DeepSeek-V4.1 decode
-is slow on MI355X, make it faster; my sglang is /home/<you>/sglang"
+is slow on MI355X, make it faster"
 ```
 
 When something is missing (here: which fixed workload every measurement uses), the run starts
@@ -249,7 +257,7 @@ Claude Code runs `petra.js` again with the same arguments plus `answers={"worklo
 
 A run that got past Setup leaves its report in its run directory under `/home/<you>/Petra/exp/` (`validation_report.md`
 when a PR is ready, `report.md` for any other outcome; the result names it as `report_path`), next to
-the task's worktree and branch, and what root wrote there is yours again. Petra never pushes: the
+the task's own clone (`wt/`) with its branch, and what root wrote there is yours again. Petra never pushes: the
 report lists the PR body and the exact `git -C <worktree> push ...`. Run it on the host, where your git
 credentials are.
 
@@ -273,7 +281,7 @@ step 3 the GEAK way (pip shows the output only with `-v`; a cached wheel skips i
 | `CLAUDE_VERSION`, `CLAUDE_BIN_DIR` | bootstrap | `latest`, `~/.local/bin` |
 | `CLAUDE_CONFIG_DIR` | bootstrap, Claude Code | `/home/<you>/.petra/claude` for root in the container; when already set, used as it is |
 | `LLM_GATEWAY_KEY` | `~/.petra_env`, the container's shell settings | unset; set, Claude Code runs on the AMD LLM gateway unless `ANTHROPIC_BASE_URL` names another |
-| `PETRA_FRAMEWORK_DIR`, `PETRA_FRAMEWORK_REPO` | bootstrap: `--framework-dir`, `--framework-repo` | none (step skipped); sglang |
+| `PETRA_FRAMEWORK_DIR`, `PETRA_FRAMEWORK_REPO` | bootstrap: `--framework-dir`, `--framework-repo` | the image's `/sgl-workspace/sglang`; sglang |
 | `PETRA_SKIP_BOOTSTRAP` | bootstrap | unset; set it to install the package with no side effects (CI, images) |
 
 ## Running it
@@ -297,7 +305,7 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `mode` | `feature` \| `issue` \| `ci` \| `perf` \| `scan` (required; inferred from `request` when not given) |
 | `task` | the upstream PR/design, issue URL, CI job/cluster or performance goal (required except `scan`) |
 | `goal` | what done means, measurable when the mode measures; the spec and the performance plan address it |
-| `framework_dir` | the framework checkout; Petra works in a worktree of it (required except `scan`) |
+| `framework_dir` | the checkout Petra takes history and the current main from; each task works in its own clone of it (for sglang the image's `/sgl-workspace/sglang` by default) |
 | `model_path` | the model the baseline and the gates run (required for `feature` and `perf`) |
 | `framework`, `platform`, `gpu_ids` | target and environment (`sglang`; empty `gpu_ids` lets Setup pick idle GPUs, which every later role then uses through `HIP_VISIBLE_DEVICES`) |
 | `workload` | the benchmark every measurement uses, e.g. `{"isl":8192,"osl":1024,"conc":64}`; required for `perf`, fixed at Setup |

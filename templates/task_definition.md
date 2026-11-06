@@ -11,7 +11,7 @@ of it.
 |---|---|---|---|---|---|---|
 | `mode` | the kind of task | required | required | required | required | required |
 | `task` | the source of truth: upstream PR or design URL, issue URL, CI job or tracker cluster, performance goal | required | required | required | required | — |
-| `framework_dir` | the framework checkout Petra works in (absolute path) | required | required | required | required | recommended: the upstream scan reads it |
+| `framework_dir` | the checkout Petra takes history and the current main from; each task works in its own clone of it (absolute path; for sglang the image's `/sgl-workspace/sglang` when not given) | required | required | required | required | the upstream scan reads it |
 | `model_path` | the model the baseline and the gates run | required | recommended: the reporter's model | — | required | — |
 | `workload` | the fixed benchmark, e.g. `{"isl": 8192, "osl": 1024, "conc": 64}` | when the task claims a gain | for a performance issue | — | required | — |
 | `goal` | what done means, measurable when the mode measures | recommended | — | — | recommended | — |
@@ -41,27 +41,27 @@ when the likely path of the task needs them.
 
 ```json
 {"mode": "feature", "task": "https://github.com/sgl-project/sglang/pull/<n>",
- "goal": "the feature passes G0–G5 on DeepSeek-V4.1 at TP4", "framework_dir": "/home/<you>/sglang",
+ "goal": "the feature passes G0–G5 on DeepSeek-V4.1 at TP4",
  "model_path": "/mnt/models/DeepSeek-V4.1-Flash", "gpu_ids": "0-3"}
 ```
 
 ```json
 {"mode": "issue", "task": "https://github.com/sgl-project/sglang/issues/<n>",
- "framework_dir": "/home/<you>/sglang", "model_path": "/mnt/models/<the reporter's model>", "stop_after": "Reproduce"}
+ "model_path": "/mnt/models/<the reporter's model>", "stop_after": "Reproduce"}
 ```
 
 ```json
-{"mode": "ci", "task": "Failure Tracker #<n>, cluster <signature>", "framework_dir": "/home/<you>/sglang"}
+{"mode": "ci", "task": "Failure Tracker #<n>, cluster <signature>"}
 ```
 
 ```json
 {"mode": "perf", "task": "DeepSeek-V4.1 decode throughput on MI355X",
- "goal": "+5% output tok/s at equal memory, guards unchanged", "framework_dir": "/home/<you>/sglang",
+ "goal": "+5% output tok/s at equal memory, guards unchanged",
  "model_path": "/mnt/models/DeepSeek-V4.1-Flash", "workload": {"isl": 8192, "osl": 1024, "conc": 64}}
 ```
 
 ```json
-{"mode": "scan", "framework_dir": "/home/<you>/sglang", "sources": ["upstream", "issues", "ci"]}
+{"mode": "scan", "sources": ["upstream", "issues", "ci"]}
 ```
 
 ## 4. When something is missing

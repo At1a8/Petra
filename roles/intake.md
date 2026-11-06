@@ -19,7 +19,8 @@ they win over anything you infer), `answers` (the user's replies to earlier ques
 2. **Fields.** Fill every field the mode needs from the request, `given` and `answers`, checking what
    you can without changing anything:
    - `framework_dir`: a git checkout of the framework's repository (`git -C <dir> remote get-url
-     origin`); say so when it is a shallow clone and the mode is `ci` or `scan`, which need history.
+     origin`); for sglang the image's `/sgl-workspace/sglang` is given by default. Say so when it is a
+     shallow clone and the mode is `ci` or `scan`, which need history.
    - `model_path`: the model the request or the issue names, found under the usual model directories
      (`/mnt`, `/data`, `$HF_HOME`). A model that is not on the machine is a question, never a download.
    - `gpu_ids`: GPUs that exist (`rocm-smi`); leave it empty to let Setup pick free ones.

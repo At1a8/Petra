@@ -18,17 +18,24 @@ that passes), `resume_run_dir`, `lock_idle_hours`.
    and return `lock: "busy"`, `run_dir: ""`, `baseline_status: "skip"`, `gpu_ids: ""`, with the holder
    (its run directory, task, container and start) and the release command in `notes`. Otherwise
    `lock: "acquired"`; a lock taken over from a run that finished or went silent is noted.
-1. **Run directory.** If `resume_run_dir` is set, reuse it: check that it exists, that its worktree and
-   branch exist, and re-run one baseline smoke to confirm the environment still matches the ledger.
+1. **Run directory.** If `resume_run_dir` is set, reuse it: check that it exists, that its clone
+   (`RUN_DIR/wt`) and branch exist, and re-run one baseline smoke to confirm the environment still
+   matches the ledger.
    Otherwise create `RUN_DIR=<exp_root>/<mode>_<slug>_<YYYYmmdd-HHMMSS>` (take the time from `date`, state
    the timezone) and write the inputs — the task definition (`templates/task_definition.md`) and the
    intake's `assumptions` — to `RUN_DIR/run.json`. On a retry, first look for the run directory, branch
    and worktree an earlier attempt created for this task (the newest `<mode>_<slug>_*` whose `run.json`
    holds this definition) and reuse them.
-2. **Task branch and worktree.** Create a worktree under `RUN_DIR/wt` on a new branch `petra/<slug>`
-   from the base commit the task names (default: the current upstream main), then give the new files
-   back to the checkout's owner (`scripts/restore_owner.sh <framework_dir>/.git RUN_DIR`;
-   `env_hygiene.md`). Never change a checkout a running server imports from.
+2. **The task's own clone and branch.** Bring `framework_dir` up to date without touching its working
+   tree: `git -C <framework_dir> fetch origin`. The image's `/sgl-workspace/sglang` is detached at the
+   image's commit, carries build changes and is what the image's sglang is installed from: never pull,
+   check out or edit there. Then give the task its own clone under `RUN_DIR/wt`, borrowing that
+   checkout's objects so only new commits are downloaded, and standing alone afterwards:
+   `git clone --reference <framework_dir> --dissociate <its origin URL> RUN_DIR/wt`, then
+   `git -C RUN_DIR/wt checkout -b petra/<slug> <base>` (the base commit the task names, default
+   `origin/main`). The clone, its branch and its commits live under RUN_DIR on the host, so they outlive
+   the container. Give them back to their owner (`scripts/restore_owner.sh RUN_DIR`; `env_hygiene.md`).
+   Never change a checkout a running server imports from.
 3. **Environment.** Pin the framework commit, container image, ROCm and PyTorch versions and the GPU set,
    and return it as `gpu_ids`: the given one, or, when none was given, GPUs that `rocm-smi` shows with no
    process and no memory in use, as many as the task needs (`env_hygiene.md`). Every later role uses
@@ -115,7 +122,7 @@ produced so far.
   `kernel_backend=command` with `kernel_backend_command`; `knowledge/kernel_backends.md`). List reply
   drafts. State the timezone of every time.
 - Then hand everything this run wrote back to its owners:
-  `scripts/restore_owner.sh <exp_root> <framework_dir>/.git` (`env_hygiene.md`).
+  `scripts/restore_owner.sh <exp_root>` (`env_hygiene.md`).
 - Last, free the machine for the next task: `python3 <petra_dir>/scripts/run_lock.py release --run-dir
   RUN_DIR`. Stop the servers and processes this run started first; a run that ends leaves nothing
   running.

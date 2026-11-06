@@ -18,7 +18,7 @@ Inputs: `work_package`, `commit`, `unit_test_cmd`.
 3. **The test must be able to fail (T1).** Prove it in a throwaway worktree under `RUN_DIR`, with the
    worktree path in the command replaced:
    - a package that **changes behaviour** (a feature, a fix): check out the parent
-     (`git worktree add RUN_DIR/t1-<wp> <commit>^`), bring in the test files the package adds, and run
+     (`git -C <worktree> worktree add RUN_DIR/t1-<wp> <commit>^`), bring in the test files the package adds, and run
      the test against the old code: it must fail;
    - a package that **keeps behaviour** (a performance change, a kernel swap, a refactor, tests of
      existing code): the parent passes too, so check out `<commit>` and break the change in one way that

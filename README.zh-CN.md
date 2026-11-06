@@ -38,7 +38,7 @@ kernel 级的工作——调优 Petra 为某个特性写的 kernel，或者 kern
 
 每个阶段调用一个角色：一个读取 `roles/<role>.md`、完成自己那部分工作并返回结构化 JSON 的 agent；`petra.js` 持有这些 schema，并且只根据其中的必填字段做分支。所有角色都遵守四条规则：
 
-- 只有 **implementer** 修改框架源码，而且只在任务的 worktree 里改；
+- 只有 **implementer** 修改框架源码，而且只在任务自己的 clone 里改；
 - 负责测量的角色（test engineer、verify engineer、performance engineer）、intake 和 reviewer 从不修改框架源码；负责测量的角色从不复用别人的数据，而是全部重新跑一遍；
 - **curator** 只修改 Petra 自己的 `knowledge/`，并且不提交，留给人审阅；
 - 没有任何角色会 push 或发帖：PR engineer 只返回确切的 `git push` 命令，issue 回复都是草稿。
@@ -46,7 +46,7 @@ kernel 级的工作——调优 Petra 为某个特性写的 kernel，或者 kern
 | 角色 | 阶段 | 职责 |
 |---|---|---|
 | `intake` | Intake | 把一句话的需求或不完整的定义整理成任务定义：判断模式，用只读检查补全字段，把采用的默认值记为假设；缺任务依据、模型或负载，或者某项信息要付出代价才能拿到时，提问而不是猜；拒绝 Petra 不做的事 |
-| `director` | Setup、Spec、Report | 创建运行目录、任务分支和 worktree，固定 commit、镜像和 GPU 并跑基线；写出验收标准可测量的特性说明（feature spec）；为每种结局写最终报告，并写明人接下来该做什么 |
+| `director` | Setup、Spec、Report | 创建运行目录以及任务自己的 clone 和分支，固定 commit、镜像和 GPU 并跑基线；写出验收标准可测量的特性说明（feature spec）；为每种结局写最终报告，并写明人接下来该做什么 |
 | `scout` | Collect | 用下文的脚本收集候选任务 |
 | `dispatcher` | Dispatch | 确定每个候选任务的差距类型、难度级别、CUDA 依赖及其在 AMD 上的起点、工作量和优先级，并排序成队列 |
 | `analyst` | Recon | 把特性涉及的每个子系统映射到目标框架中的文件、函数和挂载点，并列表说明源设计的哪些假设在 AMD 上成立；只读不写 |
@@ -67,12 +67,12 @@ kernel 级的工作——调优 Petra 为某个特性写的 kernel，或者 kern
 
 Petra 像 GEAK 一样，以 root 身份运行在 ROCm 容器里：Claude Code、Petra、git 以及框架的服务和测试都在容器里运行，紧挨着 GPU 和框架的 Python 环境。容器是一次性的（`scripts/run_docker.sh` 每次都新建一个），所以需要长期保留的东西都放在宿主机的 `/home` 下，并以相同路径挂载进容器：只装一次的 Claude Code、它的状态、各个 checkout 和你的 key。一次运行以 root 身份写进 checkout 的文件会还给原来的属主（[`scripts/restore_owner.sh`](scripts/restore_owner.sh)、[`knowledge/env_hygiene.md`](knowledge/env_hygiene.md)），所以宿主机上的 git 和你的 `git push` 照常可用。
 
-除了容器（run_docker.sh 按设计会替换它），每一步都可以重复执行：先检查，保留已有的，只补缺的。不会删除、覆盖或重新克隆任何东西。
+除了容器（run_docker.sh 按设计会替换它），每一步都可以重复执行：先检查，保留已有的，只补缺的。命令里的 `检查 || 动作` 表示只有检查不通过时才执行动作：在新机器上每个动作都会执行，再运行一次则全部跳过。不会删除、覆盖或重新克隆任何东西。
 
 ### 宿主机需要什么
 
 - 装有 AMD Instinct GPU（MI300 或 MI350 系列）且已加载 ROCm 驱动的 Linux（存在 `/dev/kfd`）。
-- 你能使用的 Docker（用户在 `docker` 组里，或者有 sudo），以及 git、curl、python3 和 tmux。
+- 你能使用的 Docker（用户在 `docker` 组里，或者有 sudo），以及 git、curl 和 python3。
 - 能访问 claude.ai、github.com 和 Docker Hub；每个 sglang 镜像约需 45 GB 磁盘。
 - 一个 AMD LLM 网关 key（`LLM_GATEWAY_KEY`）、Anthropic API key 或其他网关；都没有时，用 Claude 订阅账号登录。
 - 一个只读的 GitHub token（`GITHUB_TOKEN`），强烈建议准备：scan 和 issue 运行要通过 GitHub API 读取数据。
@@ -94,26 +94,29 @@ command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || curl -fsSL https:/
 - **LLM key（必填）。** 写的是 AMD LLM 网关 key 时，第 3 步会让 Claude Code 走这个网关（`https://llm-api.amd.com/Unified`，key 放在 `Ocp-Apim-Subscription-Key` 请求头里），网关按 Claude 模型的常用名字提供服务。不在 AMD 内部时，改写成 `export ANTHROPIC_API_KEY=sk-ant-...`，或者其他网关（`ANTHROPIC_BASE_URL` 加上 `ANTHROPIC_AUTH_TOKEN` 或 `ANTHROPIC_CUSTOM_HEADERS`）。用 Claude 订阅时不写 key，在首次启动时登录（第 4 步）。
 - **GitHub token（强烈建议）。** scan 和 issue 运行要通过 GitHub API 读取 issue、PR 和 CI 跟踪记录。没有 token 时，GitHub 对每个 IP 地址每小时只允许 60 次请求、每分钟 10 次搜索，同一出口 IP 下的所有人共用这个额度，扫描会非常慢，还可能中途停下；有 token 时每小时 5000 次。只读权限就够了，Petra 从不 push 也不发帖：在 github.com 上进入 Settings → Developer settings → Personal access tokens → Fine-grained tokens，权限选 *Public repositories (read-only)*（不勾选任何权限的 classic token 也可以）。
 
-### 2. 启动容器（宿主机）
+### 2. 获取 Petra 并启动容器（宿主机）
 
 ```bash
-[ -d ~/Petra/.git ] || git clone https://github.com/At1a8/Petra ~/Petra
-tmux new -s petra                # 一次运行要几个小时；连接断开后 tmux 能让它继续跑
+[ -d ~/Petra/.git ] || git clone https://github.com/At1a8/Petra ~/Petra   # ~/Petra 已存在时跳过
 ~/Petra/scripts/run_docker.sh    # NAME 默认是你的用户名
 ```
+
+第一行把 Petra 的代码放到 `~/Petra`：新机器上还没有 `~/Petra/.git`，所以会执行克隆；已经有了就什么都不做。克隆下来的代码里包含 `scripts/run_docker.sh`，第二行运行的就是它；第 3 步再让容器能运行 Petra。
 
 [`scripts/run_docker.sh`](scripts/run_docker.sh) 就是常见的 ROCm `run_docker.sh`：一个带 GPU 的特权容器，以相同路径挂载 `/home` 和存在的数据目录（`/data`、`/mnt` 等），并打开一个 root shell。和很多同类脚本不同，它默认不挂载宿主机的 Docker socket（`DOCKER_SOCKET=1` 才挂）：Petra 的 agent 以 root 身份、自动批准权限运行，挂上 socket 就能操作宿主机上的所有容器。
 
 - **镜像。** 任务要在最新的 sglang 上测试，所以默认使用 ROCm 10、MI35x 下最新的每日 `rocm/sgl-dev` 镜像（[`scripts/latest_image.py`](scripts/latest_image.py)，例如 `v0.5.23-rocm10-mi35x-20261103`；同一页面上的 `miles` 镜像用于强化学习，会被跳过）。每天的新镜像在第一次使用时拉取，约 43 GB。MI30x 设置 `IMAGE_VARIANT=rocm10-mi30x`；要固定镜像，设置 `IMAGE=rocm/sgl-dev:<tag>`。
-- **测的是哪份代码。** 镜像提供 PyTorch、aiter、sgl-kernel 以及它自带的一份 sglang。Petra 测试的是任务 worktree 里的代码（从当前上游 main 创建），方法是把它放在 `PYTHONPATH` 最前面；运行记录会写下镜像、镜像里 sglang 的版本和 worktree 的基础 commit。
-- **每次都是新容器。** 它会先删除同名的旧容器，连同其中仍在运行的东西。要回到正在运行的容器，重新连上 tmux（`tmux attach -t petra`）或在容器里开一个 shell（`docker exec -it <name> bash`），不要再次运行 run_docker.sh。你自己的 run_docker.sh 也可以用，只要它以相同路径挂载 `/home`。
+- **测的是哪份代码。** 镜像提供 PyTorch、aiter、sgl-kernel，以及它自带的 sglang checkout `/sgl-workspace/sglang`（带完整历史）：这就是 Petra 默认的框架来源，不需要另外克隆或指定 sglang。Setup 会把当前的 main fetch 到这个 checkout 里，但不改动它的工作区（保持镜像构建时的样子），然后在运行目录下给每个任务建一份自己的 clone，基于这个 main（借用 checkout 里已有的对象：几秒钟，约 0.7 GB）。任务的代码放在 `PYTHONPATH` 最前面运行；它的 clone、分支和 commit 都在宿主机上，容器换掉也不会丢。运行记录会写下镜像、镜像里 sglang 的版本和任务的基础 commit。
+- **每次都是新容器。** 它会先删除同名的旧容器，连同其中仍在运行的东西。要回到正在运行的容器，在容器里开一个 shell（`docker exec -it <name> bash`），不要再次运行 run_docker.sh。你自己的 run_docker.sh 也可以用，只要它以相同路径挂载 `/home`。
 
 此时还不能调用 `claude`：宿主机上的程序通过 `/home` 挂载出现在容器里，但不在 root 的 `PATH` 上（`claude: command not found`）。第 3 步会创建链接；容器里不安装任何东西。
 
-### 3. 安装 Petra（容器内，每个新容器都要做）
+### 3. 在容器里配置 Petra（每个新容器都要做）
+
+第 2 步已经把 Petra 的代码放在 `~/Petra` 了；这一步让新容器能运行它，具体做什么见下表。
 
 ```bash
-cd /home/<you>/Petra && python3 -B -m petra.bootstrap --framework-dir /home/<you>/sglang
+cd /home/<you>/Petra && python3 -B -m petra.bootstrap
 source ~/.bashrc
 claude --version    # 宿主机上的 Claude Code
 ```
@@ -124,7 +127,7 @@ claude --version    # 宿主机上的 Claude Code
 | Claude Code 状态 | 保存在宿主机的 `/home/<you>/.petra/claude`（`CLAUDE_CONFIG_DIR`，与你自己的 `~/.claude` 分开）：首次启动时的回答和 `/login` 登录不会随容器消失 |
 | git | 信任挂载进来的 checkout，它们属于你而不是 root（`safe.directory '*'`） |
 | shell | 在 root 的 `~/.bashrc` 里设置 `PYTHONDONTWRITEBYTECODE=1`（你的 checkout 里不会出现 root 所有的 `__pycache__`）、`DISABLE_AUTOUPDATER=1`（由宿主机更新 Claude Code），并加载 `/home/<you>/.petra_env`；设置了 `LLM_GATEWAY_KEY` 且没有 `ANTHROPIC_BASE_URL` 时，让 Claude Code 走 AMD LLM 网关 |
-| 框架（`--framework-dir`） | 已有的 checkout 原样使用（浅克隆只会提示，不会加深）；缺失时带完整历史克隆（`--filter=blob:none`），并把属主交给你 |
+| 框架 | 检查镜像里的 `/sgl-workspace/sglang`（Petra 默认的框架来源），原样保留；用 `--framework-dir` 可以改用宿主机上的 checkout（已有的原样使用，缺失时带完整历史克隆） |
 | 检查 | GPU、sglang、API 访问、`GITHUB_TOKEN`，`~/.petra_env` 里设置的也算（只检测） |
 
 `python3 -B` 让这第一次运行不会往 checkout 里写 root 所有的 `__pycache__`。这条命令从不写入 key。
@@ -146,30 +149,28 @@ cd /home/<you>/Petra && IS_SANDBOX=1 claude --dangerously-skip-permissions
 没有 key 时，改为选择一种登录方式并登录一次。然后输入：
 
 ```
-use /home/<you>/Petra/petra.js with mode=scan, petra_dir=/home/<you>/Petra,
-framework_dir=/home/<you>/sglang
+use /home/<you>/Petra/petra.js with mode=scan, petra_dir=/home/<you>/Petra
 ```
 
 scan 不改任何代码。它收集上次扫描以来（没有上次扫描时为最近 7 天）开放的 AMD issue、变红的 AMD CI、CUDA 优先的上游改动和硬件差距，排好序，写出 `exp/scan_<time>/task_queue.md`，每项附可以启动它的任务定义。要接手一个任务，并在复现之后停下来确认环境，就给出它的字段：
 
 ```
 use /home/<you>/Petra/petra.js with mode=issue, task=https://github.com/sgl-project/sglang/issues/41299,
-petra_dir=/home/<you>/Petra, framework_dir=/home/<you>/sglang, model_path=<weights>,
-gpu_ids=0, stop_after=Reproduce
+petra_dir=/home/<you>/Petra, model_path=<weights>, gpu_ids=0, stop_after=Reproduce
 ```
 
 或者直接用一句话描述，让 Intake 阶段写出任务定义：
 
 ```
 use /home/<you>/Petra/petra.js with petra_dir=/home/<you>/Petra, request="DeepSeek-V4.1 在 MI355X 上
-decode 太慢，帮我优化；我的 sglang 在 /home/<you>/sglang"
+decode 太慢，帮我优化"
 ```
 
 如果缺了什么（这里缺的是每次测量都用的固定负载），这次运行什么都不启动，返回 `status: needs_input`，每个字段一个问题。在对话里回答后，Claude Code 会用同样的参数加上 `answers={"workload": ...}` 再次运行 `petra.js`。[运行](#运行)一节列出了全部参数。
 
 ### 5. 运行结束后（宿主机）
 
-过了 Setup 的运行会把报告留在 `/home/<you>/Petra/exp/` 下它自己的运行目录里（PR 准备好时是 `validation_report.md`，其他结局是 `report.md`；运行结果中的 `report_path` 给出路径），旁边就是任务的 worktree 和分支，root 写在那里的文件已经还给你。Petra 从不 push：报告里列出了 PR 描述和确切的 `git -C <worktree> push ...` 命令。请在宿主机上执行它，你的 git 凭据在那里。
+过了 Setup 的运行会把报告留在 `/home/<you>/Petra/exp/` 下它自己的运行目录里（PR 准备好时是 `validation_report.md`，其他结局是 `report.md`；运行结果中的 `report_path` 给出路径），旁边就是任务自己的 clone（`wt/`）和它的分支，root 写在那里的文件已经还给你。Petra 从不 push：报告里列出了 PR 描述和确切的 `git -C <worktree> push ...` 命令。请在宿主机上执行它，你的 git 凭据在那里。
 
 ### 重复执行与选项
 
@@ -186,7 +187,7 @@ decode 太慢，帮我优化；我的 sglang 在 /home/<you>/sglang"
 | `CLAUDE_VERSION`、`CLAUDE_BIN_DIR` | bootstrap | `latest`，`~/.local/bin` |
 | `CLAUDE_CONFIG_DIR` | bootstrap、Claude Code | 容器里的 root 用 `/home/<you>/.petra/claude`；已经设置时原样使用 |
 | `LLM_GATEWAY_KEY` | `~/.petra_env`、容器的 shell 配置 | 不设置；设置后 Claude Code 走 AMD LLM 网关，除非 `ANTHROPIC_BASE_URL` 指定了别的地址 |
-| `PETRA_FRAMEWORK_DIR`、`PETRA_FRAMEWORK_REPO` | bootstrap：`--framework-dir`、`--framework-repo` | 无（跳过该步）；sglang |
+| `PETRA_FRAMEWORK_DIR`、`PETRA_FRAMEWORK_REPO` | bootstrap：`--framework-dir`、`--framework-repo` | 镜像里的 `/sgl-workspace/sglang`；sglang |
 | `PETRA_SKIP_BOOTSTRAP` | bootstrap | 不设置；设置后安装这个包时没有任何副作用（CI、构建镜像） |
 
 ## 运行
@@ -206,7 +207,7 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `mode` | `feature` \| `issue` \| `ci` \| `perf` \| `scan`（必填；没给时从 `request` 推断） |
 | `task` | 上游 PR / 设计、issue URL、CI job / 簇，或性能目标（`scan` 以外必填） |
 | `goal` | 什么算完成；可以测量的模式要写成可测量的；spec 和性能计划都要回应它 |
-| `framework_dir` | 框架的 checkout；Petra 在它的 worktree 里工作（`scan` 以外必填） |
+| `framework_dir` | Petra 从中获取历史和当前 main 的 checkout；每个任务在自己的 clone 里工作（sglang 默认用镜像里的 `/sgl-workspace/sglang`） |
 | `model_path` | 基线和各项门禁运行的模型（`feature` 和 `perf` 必填） |
 | `framework`、`platform`、`gpu_ids` | 目标与环境（`sglang`；`gpu_ids` 为空时由 Setup 挑选空闲的 GPU，之后每个角色都通过 `HIP_VISIBLE_DEVICES` 使用这组 GPU） |
 | `workload` | 每次测量都使用的基准负载，例如 `{"isl":8192,"osl":1024,"conc":64}`；`perf` 必填，在 Setup 时固定 |
@@ -279,7 +280,7 @@ Petra/
 │                            # pr_body, issue_triage, ci_triage, perf_analysis, task_queue
 ├── scripts/                 # 任务收集、审计、run_docker.sh、latest_image.py、run_lock.py、
 │                            # restore_owner.sh
-├── petra/bootstrap.py       # 安装第 3 步，在容器内运行；可以重复执行
+├── petra/bootstrap.py       # 第 3 步的配置脚本，在容器内运行；可以重复执行
 ├── setup.py, pyproject.toml # 打包；pip 构建 wheel 时 setup.py 会运行 bootstrap
 ├── tests/                   # petra.js 的 dry run，脚本、bootstrap 和 README 的单元测试
 ├── README.md, README.zh-CN.md

@@ -697,7 +697,10 @@ const scenarios = [
   ['arguments: an invalid or incomplete definition comes back as questions', async () => {
     check(asks(await run({ mode: 'magic', task: 't' }), 'mode'), 'unknown mode asked');
     check(asks(await run({ mode: 'issue' }), 'task'), 'missing task asked');
-    check(asks(await run({ mode: 'issue', task: 't', framework_dir: '' }), 'framework_dir'), 'missing checkout asked');
+    check(asks(await run({ mode: 'issue', task: 't', framework: 'vllm', framework_dir: '' }), 'framework_dir'), 'missing checkout asked');
+    const image = await run({ mode: 'issue', task: 't', framework_dir: '' });
+    const setupIns = image.calls.find((c) => c.key === 'director:setup').ins;
+    check(setupIns.framework_dir === '/sgl-workspace/sglang', `sglang defaults to the image's checkout: ${setupIns.framework_dir}`);
     check(asks(await run({ mode: 'issue', task: 't', resume_from: 'implement', run_dir: RUN }), 'resume_from'), 'resume outside feature asked');
     let msg = '';
     try { await run({ mode: 'issue', task: 't', petra_dir: '' }); } catch (e) { msg = e.message; }
