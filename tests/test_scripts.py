@@ -9,8 +9,9 @@ import sys
 import tempfile
 import textwrap
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -19,6 +20,8 @@ import audit_host_syncs  # noqa: E402
 import audit_platform_gates  # noqa: E402
 import check_framework_skills  # noqa: E402
 import latest_image  # noqa: E402
+import post_queue  # noqa: E402
+import propose_knowledge  # noqa: E402
 import run_lock  # noqa: E402
 import scan_ci  # noqa: E402
 import scan_issues  # noqa: E402
@@ -75,6 +78,143 @@ class LatestImageTest(unittest.TestCase):
         self.assertIsNone(latest_image.daily_key("v0.5.23-rocm10-mi35xx-20261103", "rocm10-mi35x"))
         self.assertEqual(latest_image.daily_key("v0.5.22.post1-rocm10-mi35x-20261103", "rocm10-mi35x"),
                          ("20261103", (0, 5, 22)))
+
+
+class PostQueueTest(unittest.TestCase):
+    """The daily queue issue in Petra's own repository; the GitHub API is faked."""
+
+    def queue(self, number, date, state="open"):
+        return {"number": number, "title": post_queue.title(date), "state": state,
+                "html_url": "https://github.com/At1a8/Petra/issues/%d" % number, "body": "q\n" + post_queue.MARKER}
+
+    def test_repo_from_url(self):
+        for url in ("https://github.com/At1a8/Petra.git", "git@github.com:At1a8/Petra.git", "https://github.com/At1a8/Petra"):
+            self.assertEqual(post_queue.repo_from_url(url), "At1a8/Petra")
+        self.assertEqual(post_queue.repo_from_url("https://gitlab.com/a/b.git"), "")
+
+    def test_a_private_detail_stops_the_post(self):
+        body = "| 1 | fix X | see rocm.docs.amd.com |\nlocal models `/data/models/some-model`\nhost gpu-node-7\nsee confluence"
+        self.assertEqual([l.split(":")[0] for l in post_queue.leaks(body, "gpu-node-7")], ["2", "3", "4"])
+        self.assertEqual(post_queue.leaks("| 1 | GLM crashes with --dcp-size 8 | #41299 |", "gpu-node-7"), [])
+
+    def test_one_issue_a_day(self):
+        old, today = self.queue(3, "2026-11-05"), self.queue(5, "2026-11-06")
+        self.assertEqual(post_queue.plan([old, today], "2026-11-06"), {"action": "update", "number": 5, "close": [3]})
+        self.assertEqual(post_queue.plan([old], "2026-11-07"), {"action": "create", "number": None, "close": [3]})
+
+    def test_post_creates_and_supersedes(self):
+        calls = []
+
+        def fake(method, path, token="", data=None):
+            calls.append((method, path, data))
+            if method == "GET":
+                return [self.queue(3, "2026-11-05"), {"number": 4, "title": "a PR", "pull_request": {}, "body": post_queue.MARKER},
+                        {"number": 2, "title": "a bug", "body": "unrelated"}]
+            return {"number": 7, "html_url": "https://github.com/At1a8/Petra/issues/7"}
+
+        with mock.patch.object(post_queue, "api", side_effect=fake):
+            out = post_queue.post("At1a8/Petra", "| 1 | task |", "2026-11-06", "t")
+        self.assertEqual((out["action"], out["number"], out["closed"]), ("created", 7, [3]))
+        self.assertEqual([(m, p) for m, p, _ in calls[1:]], [("POST", "/repos/At1a8/Petra/issues"),
+                                                           ("POST", "/repos/At1a8/Petra/issues/3/comments"),
+                                                           ("PATCH", "/repos/At1a8/Petra/issues/3")])
+        self.assertEqual(calls[1][2]["title"], "Task queue 2026-11-06")
+        self.assertTrue(calls[1][2]["body"].endswith(post_queue.MARKER + "\n"))
+
+    def test_nothing_is_posted_without_the_token_or_with_a_leak(self):
+        with tempfile.TemporaryDirectory() as d:
+            clean, leaky = Path(d) / "clean.md", Path(d) / "leaky.md"
+            clean.write_text("| 1 | task |\n")
+            leaky.write_text("weights in /data/models/x\n")
+            env = {k: v for k, v in os.environ.items() if k != "PETRA_REPO_TOKEN"}
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(post_queue, "api") as api, \
+                    redirect_stderr(io.StringIO()):
+                self.assertEqual(post_queue.main(["--body", str(clean), "--repo", "At1a8/Petra"]), 2)
+                self.assertEqual(post_queue.main(["--body", str(leaky), "--repo", "At1a8/Petra"]), 3)
+            api.assert_not_called()
+
+    def test_latest(self):
+        items = [{"number": 9, "title": "a bug", "body": ""}, self.queue(8, "2026-11-06"), self.queue(6, "2026-11-05", "closed")]
+        with mock.patch.object(post_queue, "api", return_value=items):
+            got = post_queue.latest("At1a8/Petra")
+        self.assertEqual((got["date"], got["number"], got["state"]), ("2026-11-06", 8, "open"))
+        with mock.patch.object(post_queue, "api", return_value=[]):
+            self.assertEqual(post_queue.latest("At1a8/Petra"), {})
+
+
+def git(*args, cwd=None):
+    import subprocess
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, check=True,
+                   capture_output=True, text=True)
+
+
+class ProposeKnowledgeTest(unittest.TestCase):
+    """The curator's knowledge/ changes as a pull request; a local bare repository stands in for GitHub."""
+
+    def setUp(self):
+        import subprocess
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.origin, seed, self.petra = root / "origin.git", root / "seed", root / "Petra"
+        git("init", "-q", "--bare", str(self.origin))
+        git("clone", "-q", str(self.origin), str(seed))
+        (seed / "knowledge").mkdir()
+        (seed / "knowledge" / "known_issues.md").write_text("# Known issues\n")
+        (seed / "petra.js").write_text("// petra\n")
+        git("add", "-A", cwd=seed)
+        git("commit", "-q", "-m", "seed", cwd=seed)
+        git("push", "-q", "origin", "HEAD:refs/heads/main", cwd=seed)
+        git("clone", "-q", "-b", "main", str(self.origin), str(self.petra))
+        self.run = root / "exp" / "issue_41299-glm-dcp_20261106-071502Z"
+        self.run.mkdir(parents=True)
+        self.body = self.run / "knowledge_pr.md"
+        self.body.write_text("KI-001: GLM-5.3 with --dcp-size 8 on MI300X, from issue #41299.\n")
+        self.show = lambda ref: subprocess.run(["git", "--git-dir", str(self.origin), "show", ref],
+                                               capture_output=True, text=True).stdout
+
+    def propose(self, token="t", api=None):
+        env = {k: v for k, v in os.environ.items() if k != "PETRA_REPO_TOKEN"}
+        if token:
+            env["PETRA_REPO_TOKEN"] = token
+        with mock.patch.dict(os.environ, env, clear=True), redirect_stdout(io.StringIO()) as out, \
+                redirect_stderr(io.StringIO()) as err, mock.patch.object(propose_knowledge, "api", side_effect=api):
+            rc = propose_knowledge.main(["--run-dir", str(self.run), "--body", str(self.body), "--repo", "At1a8/Petra",
+                                         "--petra-dir", str(self.petra), "--push-url", str(self.origin)])
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_only_knowledge_goes_to_its_branch_and_the_checkout_reads_main_again(self):
+        (self.petra / "knowledge" / "known_issues.md").write_text("# Known issues\nKI-001 GLM-5.3 dcp 8\n")
+        (self.petra / "knowledge" / "feature_skills" / "dcp").mkdir(parents=True)
+        (self.petra / "knowledge" / "feature_skills" / "dcp" / "SKILL.md").write_text("draft\n")
+        (self.petra / "petra.js").write_text("// a local change that is not knowledge\n")
+        calls = []
+
+        def fake(method, path, token="", data=None):
+            calls.append((method, path, data))
+            return [] if method == "GET" else {"number": 12, "html_url": "https://github.com/At1a8/Petra/pull/12"}
+
+        rc, out, err = self.propose(api=fake)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["url"], "https://github.com/At1a8/Petra/pull/12")
+        branch = "petra/knowledge/" + self.run.name
+        self.assertIn("KI-001", self.show(branch + ":knowledge/known_issues.md"))
+        self.assertEqual(self.show(branch + ":knowledge/feature_skills/dcp/SKILL.md"), "draft\n")
+        self.assertEqual(self.show(branch + ":petra.js"), "// petra\n")
+        self.assertEqual(self.show("main:knowledge/known_issues.md"), "# Known issues\n", "main is never pushed")
+        self.assertEqual((calls[1][0], calls[1][2]["head"], calls[1][2]["base"]), ("POST", branch, "main"))
+        self.assertEqual((self.petra / "knowledge" / "known_issues.md").read_text(), "# Known issues\n")
+        self.assertFalse((self.petra / "knowledge" / "feature_skills").exists())
+        self.assertIn("a local change", (self.petra / "petra.js").read_text())
+
+    def test_nothing_leaves_without_a_token_with_a_leak_or_without_changes(self):
+        self.assertEqual(self.propose()[0:2], (0, '{"action": "none", "reason": "no changes under knowledge/"}\n'))
+        (self.petra / "knowledge" / "known_issues.md").write_text("# Known issues\nKI-001 GLM-5.3 dcp 8\n")
+        self.assertEqual(self.propose(token="")[0], 2)
+        (self.petra / "knowledge" / "known_issues.md").write_text("# Known issues\nweights in /data/models/x\n")
+        self.assertEqual(self.propose()[0], 3)
+        self.assertIn("/data/models/x", (self.petra / "knowledge" / "known_issues.md").read_text(), "left as it was")
+        self.assertEqual(self.show("petra/knowledge/" + self.run.name), "", "no branch was pushed")
 
 
 class RunLockTest(unittest.TestCase):

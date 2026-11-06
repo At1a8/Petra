@@ -23,6 +23,12 @@ Input: `candidates_path`.
    top entries, include the task definition that starts it (`templates/task_definition.md`) with every
    field its mode requires that the scan can establish; leave out what it cannot (a model that is not
    on this machine, the workload of a performance task), and the run asks for it.
+6. Write `RUN_DIR/queue_issue.md`, the same queue for Petra's public issue tracker, where the report
+   posts it: the framework commit, the sources and their scope, the ranked table and the top entries'
+   task definitions, and nothing about this machine or its owner. No hostnames, no local paths
+   (`/data`, `/mnt`, `/home`, `/workspace`, `/sgl-workspace`, ...), weights only as `model_path=<weights>`,
+   no internal sites, names or priorities that are not on GitHub. `scripts/post_queue.py` refuses a body
+   that names a local path or this machine.
 
 Return:
 

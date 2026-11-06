@@ -41,7 +41,7 @@ kernel 级的工作——调优 Petra 为某个特性写的 kernel，或者 kern
 - 只有 **implementer** 修改框架源码，而且只在任务自己的分支上改；
 - 负责测量的角色（test engineer、verify engineer、performance engineer）、intake 和 reviewer 从不修改框架源码；负责测量的角色从不复用别人的数据，而是全部重新跑一遍；
 - **curator** 只修改 Petra 自己的 `knowledge/`，并且不提交，留给人审阅；
-- 没有任何角色会 push 或发帖：PR engineer 只返回确切的 `git push` 命令，issue 回复都是草稿。
+- 没有任何角色会 push，或往上游发帖：PR engineer 只返回确切的 `git push` 命令，issue 回复都是草稿；会发出去的只有 Petra 自己仓库里的两样东西：scan 的任务队列（一个 issue），以及 curator 的知识更新（一个由人合并的 PR）。
 
 | 角色 | 阶段 | 职责 |
 |---|---|---|
@@ -61,7 +61,7 @@ kernel 级的工作——调优 Petra 为某个特性写的 kernel，或者 kern
 | `reviewer` | Review | 像维护者一样阅读 diff 和证据，以已知 reward hack 目录为起点：shape、dtype、并行布局、graph、回退路径、不造成损害、框架的惯例、公平的基准测试；要求的修改，以及为每个确认的 hack 写的测试，以工作包形式返回；可以换用另一个模型（`review_model`） |
 | `kernel_liaison` | Kernel | 把 kernel hand-off 转成后端的任务，运行 `command` 类后端，依据后端自身的验证评判结果，并把收益作为工作包返回 |
 | `pr_engineer` | PR | 不改任何代码：检查代码整洁、lint 和 CI 注册（缺什么就作为工作包退回），在不改变代码内容的前提下整理成每个工作包一个 commit，试合并 main 只用来报告冲突，在最终 commit 上检查关闭特性时的行为，写 PR 描述和 push 命令 |
-| `curator` | Report | 把这次运行证实的内容写进 `knowledge/`（已知问题、特性 skill、CUDA → AMD 对照条目、新发现的 reward hack、方法经验），每个数字都能追溯到这次运行 |
+| `curator` | Report | 把这次运行证实的内容写进 `knowledge/`（已知问题、特性 skill、CUDA → AMD 对照条目、新发现的 reward hack、方法经验），每个数字都能追溯到这次运行，并作为 PR 提到 Petra 仓库 |
 
 ## 安装
 
@@ -92,7 +92,8 @@ command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || curl -fsSL https:/
 运行最后两行之前，先把 `<your AMD LLM gateway key>` 和 `<your GitHub token>` 换成你自己的值：每一行都只在 `~/.petra_env` 里还没有这个 key 时才写入，所以以后要换 key，直接编辑这个文件。`~/.petra_env` 把 key 保存在宿主机上，只有你能读取，每个容器都会加载它。
 
 - **LLM key（必填）。** 写的是 AMD LLM 网关 key 时，第 3 步会让 Claude Code 走这个网关（`https://llm-api.amd.com/Unified`，key 放在 `Ocp-Apim-Subscription-Key` 请求头里），网关按 Claude 模型的常用名字提供服务。不在 AMD 内部时，改写成 `export ANTHROPIC_API_KEY=sk-ant-...`，或者其他网关（`ANTHROPIC_BASE_URL` 加上 `ANTHROPIC_AUTH_TOKEN` 或 `ANTHROPIC_CUSTOM_HEADERS`）。用 Claude 订阅时不写 key，在首次启动时登录（第 4 步）。
-- **GitHub token（强烈建议）。** scan 和 issue 运行要通过 GitHub API 读取 issue、PR 和 CI 跟踪记录。没有 token 时，GitHub 对每个 IP 地址每小时只允许 60 次请求、每分钟 10 次搜索，同一出口 IP 下的所有人共用这个额度，扫描会非常慢，还可能中途停下；有 token 时每小时 5000 次。只读权限就够了，Petra 从不 push 也不发帖：在 github.com 上进入 Settings → Developer settings → Personal access tokens → Fine-grained tokens，权限选 *Public repositories (read-only)*（不勾选任何权限的 classic token 也可以）。
+- **GitHub token（强烈建议）。** scan 和 issue 运行要通过 GitHub API 读取 issue、PR 和 CI 跟踪记录。没有 token 时，GitHub 对每个 IP 地址每小时只允许 60 次请求、每分钟 10 次搜索，同一出口 IP 下的所有人共用这个额度，扫描会非常慢，还可能中途停下；有 token 时每小时 5000 次。只读权限就够了，Petra 从不 push，也从不往上游发帖：在 github.com 上进入 Settings → Developer settings → Personal access tokens → Fine-grained tokens，权限选 *Public repositories (read-only)*（不勾选任何权限的 classic token 也可以）。
+- **Petra 仓库 token（可选）。** Petra 会把结果发到它自己的仓库，开发者在 GitHub 网页上就能看到：scan 的任务队列发成当天的 issue（当天再扫一次会更新它，第二天的会把它关掉），curator 的知识更新则从 `petra/knowledge/<run>` 分支向 main 提一个 PR，由你审阅合并。这需要一个只对这个仓库有效的 token，这样它没法往别处发：fine-grained token，*Only select repositories* 选 `At1a8/Petra`，*Repository permissions* 里 *Issues*、*Contents* 和 *Pull requests* 都选 *Read and write*，然后以 `export PETRA_REPO_TOKEN=<token>` 写进 `~/.petra_env`。Petra 只 push `petra/` 开头的分支；在 GitHub 上给 main 开分支保护（要求通过 PR 合并），这个 token 就也改不了 main。没有这个 token 时，队列只留在运行目录里，知识更新只留在容器的 checkout 里，报告会给出发布它们的命令。
 
 ### 2. 启动容器（宿主机）
 
@@ -153,7 +154,7 @@ cd /workspace/Petra && IS_SANDBOX=1 claude --dangerously-skip-permissions
 use /workspace/Petra/petra.js with mode=scan, petra_dir=/workspace/Petra
 ```
 
-scan 不改任何代码。它收集上次扫描以来（没有上次扫描时为最近 7 天）开放的 AMD issue、变红的 AMD CI、CUDA 优先的上游改动和硬件差距，排好序，写出 `exp/scan_<time>/task_queue.md`，每项附可以启动它的任务定义。要接手一个任务，并在复现之后停下来确认环境，就给出它的字段：
+scan 不改任何代码。它收集上次扫描以来（没有上次扫描时为最近 7 天）开放的 AMD issue、变红的 AMD CI、CUDA 优先的上游改动和硬件差距，排好序，写出 `exp/scan_<time>/task_queue.md`，每项附可以启动它的任务定义，并把同一份队列去掉本机信息后，发成 Petra 仓库里当天的 issue。要接手一个任务，并在复现之后停下来确认环境，就给出它的字段：
 
 ```
 use /workspace/Petra/petra.js with mode=issue, task=https://github.com/sgl-project/sglang/issues/41299,
@@ -180,7 +181,8 @@ decode 太慢，帮我优化"
 | `experiment_ledger.md` | 环境、基线和每一次测量 |
 | `logs/` | 每次启动服务或 benchmark 一个日志，`<tag>_<time>.log` |
 | `pr_body.md`、`patches/` | PR 描述，以及导成 patch 的分支 commit |
-| `task_queue.md` | scan 排好序的任务，每项附可以启动它的任务定义；旁边是各个来源找到的内容（`<source>.json`） |
+| `knowledge_pr.md` | curator 向 Petra 仓库提的 PR 的描述 |
+| `task_queue.md`、`queue_issue.md` | scan 排好序的任务，每项附可以启动它的任务定义；旁边是各个来源找到的内容（`<source>.json`）。后者是发布出去的同一份队列，不含本机信息 |
 
 Petra 从不 push。任务的分支 `petra/<slug>` 在 `/sgl-workspace/sglang` 里，报告给出确切的 `git -C /sgl-workspace/sglang push ...`：可以在容器里用有 push 权限的凭据执行它。运行目录随容器保留和删除；要保留某次运行，或者要在宿主机上 push（你的 git 凭据在那里），就把它复制到你宿主机上的 home（`<run>` 是运行目录的名字）：
 
@@ -205,6 +207,7 @@ cp -r /workspace/Petra/exp/<run> "$PETRA_HOST_HOME"/ && /workspace/Petra/scripts
 | `PETRA_REPO_URL`、`PETRA_REF` | bootstrap | `https://github.com/At1a8/Petra.git`，它的默认分支 |
 | `CLAUDE_VERSION`、`CLAUDE_BIN_DIR` | bootstrap | `latest`，`~/.local/bin` |
 | `CLAUDE_CONFIG_DIR` | bootstrap、Claude Code | 容器里的 root 用你宿主机上的 `~/.petra/claude`；已经设置时原样使用 |
+| `PETRA_REPO_TOKEN` | `~/.petra_env`、`scripts/post_queue.py`、`scripts/propose_knowledge.py` | 不设置；只对 Petra 自己仓库有 Issues、Contents、Pull requests 读写权限的 fine-grained token，scan 用它发布当天的任务队列，curator 用它提 PR |
 | `LLM_GATEWAY_KEY` | `~/.petra_env`、容器的 shell 配置 | 不设置；设置后 Claude Code 走 AMD LLM 网关，除非 `ANTHROPIC_BASE_URL` 指定了别的地址 |
 | `PETRA_FRAMEWORK_DIR`、`PETRA_FRAMEWORK_REPO` | bootstrap：`--framework-dir`、`--framework-repo` | 镜像里的 `/sgl-workspace/sglang`；sglang |
 | `PETRA_SKIP_BOOTSTRAP` | bootstrap | 不设置；设置后安装这个包时没有任何副作用（CI、构建镜像） |
@@ -269,7 +272,7 @@ python3 scripts/run_lock.py release --force   # 那个运行已经中断时，�
 | `scripts/audit_platform_gates.py` | 换到新架构时需要重新检查的平台门控（在 gfx1250 上为真的能力判断、wave32 假设） |
 | `scripts/audit_host_syncs.py` | 热路径上的 host-device 同步和拷贝候选点（供 profile 参考的线索） |
 
-`scripts/restore_owner.sh`（POSIX sh）把 root 在容器里写到宿主机挂载目录中的文件还给属主（`/workspace` 里的不用还）；每个 agent 在 git 写操作之后都会运行它（[`knowledge/env_hygiene.md`](knowledge/env_hygiene.md)）。`scripts/check_framework_skills.py --framework-dir <dir>` 拿 skill 索引和框架 checkout 对照：索引里提到但已经不存在的 skill，以及索引还没收录的新 skill（scout 每次 scan 都会运行它）。`scripts/latest_image.py [--variant rocm10-mi30x]` 输出最新的每日 sglang 镜像（`run_docker.sh` 从它启动；director 拿运行所用的镜像和它比较）。`scripts/run_lock.py` 保证一台机器同时只跑一个 Petra 任务（`acquire`、`release`、`status`）。
+`scripts/restore_owner.sh`（POSIX sh）把 root 在容器里写到宿主机挂载目录中的文件还给属主（`/workspace` 里的不用还）；每个 agent 在 git 写操作之后都会运行它（[`knowledge/env_hygiene.md`](knowledge/env_hygiene.md)）。`scripts/check_framework_skills.py --framework-dir <dir>` 拿 skill 索引和框架 checkout 对照：索引里提到但已经不存在的 skill，以及索引还没收录的新 skill（scout 每次 scan 都会运行它）。`scripts/latest_image.py [--variant rocm10-mi30x]` 输出最新的每日 sglang 镜像（`run_docker.sh` 从它启动；director 拿运行所用的镜像和它比较）。`scripts/run_lock.py` 保证一台机器同时只跑一个 Petra 任务（`acquire`、`release`、`status`）。`scripts/post_queue.py` 把 scan 的队列发成 Petra 自己仓库里当天的 issue，正文里提到本机或本地路径时拒绝发布；`--latest` 输出最新的一个，下一次 scan 从它接着扫。`scripts/propose_knowledge.py` 把 curator 在 `knowledge/` 下的改动，放在一个临时 worktree 里基于当前的 main 做成从 `petra/knowledge/<run>` 到 main 的 PR，然后把 checkout 里的 `knowledge/` 恢复原样，这样之后的运行只会读到合并过的知识。
 
 ## 测试
 

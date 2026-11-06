@@ -8,7 +8,11 @@ Read: `knowledge/dispatch.md`, `knowledge/issue_triage.md` §1, `knowledge/ci_tr
 ## PHASE=collect (scan)
 
 Inputs: `sources` (any of `upstream`, `issues`, `ci`, `hardware`, `perf`), `since` (date or commit;
-default: the previous scan under `exp_root`, else 7 days), `framework_dir`.
+default: the previous queue's date, else 7 days), `framework_dir`.
+
+The previous queue is the newest scan under `exp_root`, else the newest task-queue issue in Petra's own
+repository, which every container sees: `python3 <petra_dir>/scripts/post_queue.py --latest` prints its
+date, URL and body (`{}` when there is none).
 
 1. Choose `RUN_DIR=<exp_root>/scan_<time>`, `<time>` from `date -u +%Y%m%d-%H%M%SZ` (UTC), and take the
    machine first — one Petra task per machine: `python3 <petra_dir>/scripts/run_lock.py acquire
@@ -35,7 +39,7 @@ default: the previous scan under `exp_root`, else 7 days), `framework_dir`.
      — framework skills that Petra's index names but the framework dropped, and new ones it does not
      name yet; the report lists them for the curator, they are not tasks.
 4. Merge into `RUN_DIR/candidates.json`: one entry per candidate with `source`, `ref` (PR, issue,
-   cluster, file:line), `title`, `evidence`. Mark entries already present in the previous scan's queue
+   cluster, file:line), `title`, `evidence`. Mark entries already present in the previous queue
    as `seen`.
 5. Remove the worktree: `git -C <framework_dir> worktree remove --force RUN_DIR/main`.
 

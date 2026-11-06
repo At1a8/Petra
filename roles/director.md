@@ -118,6 +118,12 @@ produced so far.
   When it is not empty, open the report with it: what is left, where, and the command that cleans it.
 - `scan`: when `RUN_DIR/skills.json` lists framework skills that are missing or not indexed, add them
   to the report as index maintenance for the curator.
+- `scan` that reached Dispatch: post the day's queue as an issue in Petra's own repository, the one post
+  Petra makes: `python3 <petra_dir>/scripts/post_queue.py --body RUN_DIR/queue_issue.md --date <the
+  scan's UTC date>`. It updates that day's issue if there is one and closes earlier ones; put the URL
+  it prints in the report. Exit 3 means the body names something local or internal: remove what it
+  lists from `queue_issue.md` and post again. Exit 2 (no `PETRA_REPO_TOKEN`) or a network failure:
+  give the command in the report for a human to run. Post nothing else, anywhere.
 - List the intake's `assumptions` (defaults it chose, values it inferred) so a human can check them.
 
 - `ready_for_review`: write `RUN_DIR/validation_report.md` (`templates/validation_report.md`); every
