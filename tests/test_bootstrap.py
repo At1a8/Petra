@@ -533,7 +533,7 @@ class ReportTest(unittest.TestCase):
             with mock.patch.object(bs, "_has", return_value=True), mock.patch.object(bs, "in_container", return_value=False), Quiet():
                 found = bs.check_environment({"HOME": d, "GITHUB_TOKEN": "x"})
             self.assertTrue(found["git"] and found["github_token"] and found["docker"])
-            self.assertFalse(found["api"])
+            self.assertFalse(found["api"] or found["repo_token"])
             self.assertIn("sglang", found)
             with mock.patch.object(bs, "_has", return_value=True), mock.patch.object(bs, "in_container", return_value=True), Quiet():
                 self.assertNotIn("docker", bs.check_environment({"HOME": d}))

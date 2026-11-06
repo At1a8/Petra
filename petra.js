@@ -1,6 +1,6 @@
 export const meta = {
   name: 'petra',
-  description: 'Petra: the framework agent for open-source LLM inference frameworks on AMD GPUs (sglang first). It turns one task (an upstream feature to bring to AMD, an AMD user issue, a red AMD CI job, a system-level performance gap) into a verified, reviewable pull request: correct first (independent unit gates, G0-G4 against a same-pattern baseline, an investigation loop with controls), then fast (equal-budget G5), within the community rules of knowledge/guardrails.md. mode=scan collects and ranks tasks from all sources without changing code. Petra never pushes or posts: it prepares the branch, the PR body and the reply drafts for a human.',
+  description: 'Petra: the framework agent for open-source LLM inference frameworks on AMD GPUs (sglang first). It turns one task (an upstream feature to bring to AMD, an AMD user issue, a red AMD CI job, a system-level performance gap) into a verified, reviewable pull request: correct first (independent unit gates, G0-G4 against a same-pattern baseline, an investigation loop with controls), then fast (equal-budget G5), within the community rules of knowledge/guardrails.md. mode=scan collects and ranks tasks from all sources without changing code. Petra never pushes and never posts upstream: it prepares the branch, the PR body and the reply drafts for a human; it posts only to its own repository: a scan\'s task queue as an issue, and the knowledge a run proved as a pull request for a human to merge.',
   whenToUse: 'Pass args.petra_dir (absolute path of the Petra checkout, required) and the task, either as args.request (the user\'s words, any language; the Intake phase turns it into a task definition) or as the task-definition fields of templates/task_definition.md: args.mode (feature | issue | ci | perf | scan), args.task (the upstream PR or design, issue URL, CI job or tracker cluster, or performance goal), args.framework_dir (the framework checkout; for sglang the image\'s /sgl-workspace/sglang by default), args.model_path (required for feature and perf), args.workload (required for perf: the fixed benchmark every measurement uses), args.goal (what done means), args.framework (default sglang), args.platform, args.gpu_ids, args.container, args.apply_prs (perf), args.sources and args.since (scan), args.stop_after (a phase title), args.resume_from="implement" with args.run_dir (feature: continue after a human approved design.md), args.kernel_backend (none | geak | command) with args.kernel_backend_dir (geak) or args.kernel_backend_command (command), args.kernel_budget. A definition that lacks something its mode needs returns status=needs_input with questions and starts nothing: answer them and run again with the same args plus args.answers ({"<field>": <value>}). Operator settings: args.exp_root, args.review_model (the reviewer\'s model, where the runtime takes one per call), args.max_fix_rounds, args.max_investigate_rounds, args.max_review_rounds, args.max_work_packages, args.agent_retries, args.agent_timeout_ms.',
   phases: [
     { title: 'Intake', detail: 'intake: turn a request, or a definition with gaps, into a complete task definition; questions when something is missing' },
@@ -24,7 +24,7 @@ export const meta = {
     { title: 'PR', detail: 'pr_engineer: hygiene, lint, upstream sync, pr_body.md, exact push command; never pushes' },
     { title: 'Collect', detail: 'scout: upstream changes, issues, CI trackers, platform gates -> candidates [scan]' },
     { title: 'Dispatch', detail: 'dispatcher: type, level, dependencies, effort, ranking, ecosystem-matrix changes [scan]' },
-    { title: 'Report', detail: 'director: final report for every outcome of a run that has its run directory, then frees the machine; curator: knowledge updates' },
+    { title: 'Report', detail: 'director: final report for every outcome of a run that has its run directory (a scan also posts its queue as an issue in Petra\'s own repository), then frees the machine; curator: knowledge updates, proposed as a pull request to Petra\'s own repository' },
   ],
 };
 
@@ -320,7 +320,9 @@ function rolePrompt(role, sub, ins, attempt) {
   const writes = role === 'intake'
     ? 'No RUN_DIR exists yet: change nothing; every check you run is read-only. Never push, never post on GitHub.'
     : `Write artifacts only under RUN_DIR (code changes only in the
-task worktree named in the inputs). Never push, never post on GitHub.
+task worktree named in the inputs). Never push, never post on GitHub. The exceptions are Petra's own repository
+only: a scan's task-queue issue (scripts/post_queue.py) and the curator's knowledge pull request
+(scripts/propose_knowledge.py).
 Framework code runs from the tree under test, the task worktree (or RUN_DIR/base for a baseline at the
 base commit): put it first on PYTHONPATH (sglang: <tree>/python) for every server, test and benchmark.
 Use only the GPUs in gpu_ids: export HIP_VISIBLE_DEVICES=<gpu_ids> for every server, test and
@@ -564,7 +566,8 @@ const K_COLLECT = S({
   notes: str,
 }, ['status']);
 const REPORT = S({ report_path: str, summary: str }, ['report_path']);
-const LEARN = S({ updates: arr(S({ file: str, change: str }, ['file'])), skill_status: str }, ['updates']);
+const LEARN = S({ updates: arr(S({ file: str, change: str }, ['file'])), skill_status: str, pr_url: str, notes: str },
+  ['updates']);
 const COLLECT = S({ lock: LOCK, run_dir: str, candidates_path: str, counts: obj, notes: str },
   ['lock', 'run_dir', 'candidates_path']);
 const DISPATCH = S({
@@ -589,7 +592,10 @@ async function finish(status, at) {
     }
     const learn = await call('curator', 'learn',
       inputs({ status, report_path: R.report_path, phases: R.phases }), LEARN);
-    if (learn) R.knowledge_updates = learn.updates || [];
+    if (learn) {
+      R.knowledge_updates = learn.updates || [];
+      R.knowledge_pr = learn.pr_url || '';
+    }
   }
   R.run_dir = C.run_dir;
   log(`[petra] mode=${MODE} status=${status}${at ? ` at ${at}` : ''}` +
