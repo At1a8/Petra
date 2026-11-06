@@ -1,19 +1,20 @@
 """Petra bootstrap: set up Petra where it runs; safe to run again at any time.
 
-Petra runs inside a ROCm container as root, the way GEAK does. Claude Code is installed once on the
-host and the checkouts stay there; the container (scripts/run_docker.sh) mounts /home at the same path
-and is recreated on every start, so run this in every new container (README step 3).
+Petra runs inside a ROCm container as root, the way GEAK does: Petra, its runs and the code they
+change live in the container's /workspace, one copy per container. Claude Code, installed once, its
+state and your keys stay in your home on the host, which scripts/run_docker.sh mounts at the same path
+and names in PETRA_HOST_HOME. Run this once in every new container (README step 3).
 
 Every step checks first, keeps what is already there and installs or creates only what is missing.
 Nothing is deleted, overwritten or re-cloned: a step that could only proceed by changing existing
 state warns and leaves it alone.
 
   checkout      clone Petra to $PETRA_HOME, unless run inside a checkout or one is already there
-  claude-in     (container) link the host's Claude Code onto PATH instead of installing another
+  claude-in     (container) link your Claude Code on the host onto PATH instead of installing another
   claude        install the Claude Code CLI if it is still missing; update one older than petra.js needs
   path          put the CLI's directory on PATH for new shells (one marked block in ~/.bashrc)
   claude-state  (root in a container) keep Claude Code's state on the host, in ~/.petra/claude next to
-                the keys (CLAUDE_CONFIG_DIR): first-start answers and a /login outlive the container
+                the keys (CLAUDE_CONFIG_DIR): first-start answers and a /login are given once
   git           (root in a container) trust the mounted checkouts, which belong to another user
   shell         (root in a container) no __pycache__ in the checkouts, no Claude Code self-update, the
                 keys kept on the host in ~/.petra_env, and with LLM_GATEWAY_KEY Claude Code on the AMD LLM
@@ -28,6 +29,8 @@ state warns and leaves it alone.
 
 Environment (a flag wins over its variable):
   PETRA_HOME, PETRA_REPO_URL, PETRA_REF       the checkout (default ./Petra, or the one you are in)
+  PETRA_HOST_HOME                             (container) your home on the host: your Claude Code, its
+                                              state and ~/.petra_env (scripts/run_docker.sh passes it)
   CLAUDE_VERSION, CLAUDE_BIN_DIR              native-installer target (latest), its bin dir (~/.local/bin)
   CLAUDE_CONFIG_DIR                           when set, used as it is instead of ~/.petra/claude
   PETRA_FRAMEWORK_DIR, PETRA_FRAMEWORK_REPO   --framework-dir (default: the image's checkout), --framework-repo
@@ -175,6 +178,7 @@ def settings(env=None, opts=None) -> dict:
         "claude_version": env.get("CLAUDE_VERSION") or "latest",
         "claude_bin_dir": _expand(env.get("CLAUDE_BIN_DIR") or "~/.local/bin", env),
         "user_home": _expand("~", env),
+        "host_home": _expand(env["PETRA_HOST_HOME"], env) if env.get("PETRA_HOST_HOME") else "",
         "shell": env.get("SHELL") or "",
         "framework_dir": _expand(framework_dir, env) if framework_dir else "",
         "framework_repo": opts.get("framework_repo") or env.get("PETRA_FRAMEWORK_REPO") or DEFAULT_FRAMEWORK_REPO,
@@ -182,11 +186,16 @@ def settings(env=None, opts=None) -> dict:
 
 
 def owner_dirs(s: dict) -> list:
-    """Ancestors of the Petra checkout, closest first, owned by the checkout's owner: in the
-    container, the host home that holds that user's Claude Code and keys."""
+    """Where the container looks for your Claude Code and keys, closest first: your home on the host
+    (PETRA_HOST_HOME); without it, the ancestors of the Petra checkout owned by the checkout's owner,
+    unless that is root, as for a checkout in /workspace."""
+    if s.get("host_home"):
+        return [s["host_home"]] if os.path.isdir(s["host_home"]) else []
     try:
         uid = os.stat(s["home"]).st_uid
     except OSError:
+        return []
+    if uid == 0:
         return []
     out, d = [], os.path.dirname(s["home"])
     while d != os.path.dirname(d):
@@ -207,9 +216,18 @@ def host_claude(s: dict) -> str:
     return ""
 
 
+def host_home_missing(s: dict) -> str:
+    """Why owner_dirs found no home on the host, for the warnings; '' when it found one."""
+    if owner_dirs(s):
+        return ""
+    if s.get("host_home"):
+        return "PETRA_HOST_HOME=%s is not mounted in this container" % s["host_home"]
+    return "no PETRA_HOST_HOME naming your home on the host (scripts/run_docker.sh passes it)"
+
+
 def keys_file(s: dict) -> str:
-    """~/.petra_env of the checkout's owner: next to their Claude Code, else in the topmost
-    directory they own."""
+    """~/.petra_env in your home on the host: next to your Claude Code, else in the topmost
+    directory owner_dirs names."""
     claude = host_claude(s)
     if claude:
         return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(claude))), KEYS_FILE)
@@ -218,8 +236,8 @@ def keys_file(s: dict) -> str:
 
 
 def claude_state_dir(s: dict) -> str:
-    """Where root in the container keeps Claude Code's state: ~/.petra/claude of the checkout's owner,
-    next to the keys. Separate from their own ~/.claude, which root would otherwise take over."""
+    """Where root in the container keeps Claude Code's state: ~/.petra/claude in your home on the host,
+    next to the keys. Separate from your own ~/.claude, which root would otherwise take over."""
     keys = keys_file(s)
     return os.path.join(os.path.dirname(keys), STATE_DIR) if keys else ""
 
@@ -270,7 +288,9 @@ def ensure_claude_link(s: dict) -> tuple[str, str]:
         return "kept", found
     host = host_claude(s)
     if not host:
-        warn("claude-in: no Claude Code in the home that owns %s; install it on the host (README step 1)" % s["home"])
+        missing = host_home_missing(s)
+        warn("claude-in: %s" % (missing or "no Claude Code in %s; install it on the host (README step 1)"
+                                % owner_dirs(s)[0]))
         return "skipped", "no host install"
     if os.path.lexists(CONTAINER_CLAUDE):
         warn("claude-in: %s exists but is not on PATH; left as it is" % CONTAINER_CLAUDE)
@@ -417,7 +437,7 @@ def ensure_claude_state(s: dict, env=None) -> tuple[str, str]:
         return "kept", env["CLAUDE_CONFIG_DIR"]
     d = claude_state_dir(s)
     if not d:
-        warn("claude-state: no home owned by the owner of %s; Claude Code's state stays in the container" % s["home"])
+        warn("claude-state: %s; Claude Code's state stays in the container" % host_home_missing(s))
         return "skipped", "no host home"
     created = not os.path.isdir(d)
     if created:

@@ -95,6 +95,30 @@ class HostHomeTest(unittest.TestCase):
             self.assertEqual(bs.host_claude(s), str(exe))
             self.assertEqual(bs.keys_file(s), str(home / ".petra_env"))
 
+    def test_petra_host_home_names_your_home(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d) / "u"
+            exe = make_exe(home / ".local" / "bin" / "claude")
+            co = make_checkout(Path(d) / "workspace" / "Petra")
+            s = S("/", HOME="/root", PETRA_HOME=str(co), PETRA_HOST_HOME=str(home))
+            self.assertEqual(bs.owner_dirs(s), [str(home)])
+            self.assertEqual(bs.host_claude(s), str(exe))
+            self.assertEqual(bs.keys_file(s), str(home / ".petra_env"))
+            self.assertEqual(bs.claude_state_dir(s), str(home / ".petra" / "claude"))
+            self.assertEqual(bs.host_home_missing(s), "")
+            gone = S("/", HOME="/root", PETRA_HOME=str(co), PETRA_HOST_HOME=str(Path(d) / "elsewhere"))
+            self.assertEqual((bs.owner_dirs(gone), bs.keys_file(gone)), ([], ""))
+            self.assertIn("not mounted", bs.host_home_missing(gone))
+
+    def test_a_checkout_of_root_names_no_home(self):
+        """Petra cloned into /workspace belongs to root, which says nothing about your home."""
+        with tempfile.TemporaryDirectory() as d:
+            s = S("/", HOME="/root", PETRA_HOME=str(make_checkout(Path(d) / "workspace" / "Petra")))
+            of_root = os.stat_result((0o40755, 0, 0, 1, 0, 0, 0, 0, 0, 0))
+            with mock.patch.object(bs.os, "stat", return_value=of_root):
+                self.assertEqual(bs.owner_dirs(s), [])
+                self.assertIn("no PETRA_HOST_HOME", bs.host_home_missing(s))
+
 
 class CheckoutTest(unittest.TestCase):
     def test_existing_checkouts_are_kept(self):
@@ -149,9 +173,48 @@ class GiveBackTest(unittest.TestCase):
             self.assertEqual(r.returncode, 0)
             self.assertEqual((os.stat(f).st_uid, os.stat(f).st_gid), (before.st_uid, before.st_gid))
 
-    @unittest.skipUnless(shutil.which("bash"), "needs bash")
-    def test_run_docker_script_parses(self):
+
+@unittest.skipUnless(shutil.which("bash"), "needs bash")
+class RunDockerTest(unittest.TestCase):
+    """scripts/run_docker.sh against a fake docker that logs its arguments: a container is never removed."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        self.log = self.tmp / "docker.log"
+        fake = self.tmp / "bin"
+        make_exe(fake / "docker").write_text(
+            '#!/bin/sh\necho "$*" >> "$DOCKER_LOG"\n'
+            'if [ "$1" = inspect ]; then [ -n "$FAKE_IMAGE" ] || exit 1; echo "$FAKE_IMAGE"; fi\n')
+        make_exe(fake / "sudo").write_text('#!/bin/sh\nexec "$@"\n')
+        self.path = "%s:%s" % (fake, os.environ.get("PATH", "/usr/bin:/bin"))
+
+    def run_docker(self, existing="", image=""):
+        env = {"PATH": self.path, "HOME": str(self.tmp / "home"), "USER": "tester", "DOCKER_LOG": str(self.log),
+               "FAKE_IMAGE": existing, "IMAGE": image}
+        r = subprocess.run(["bash", str(ROOT / "scripts" / "run_docker.sh")], env=env, capture_output=True, text=True)
+        calls = self.log.read_text().splitlines() if self.log.exists() else []
+        self.log.unlink(missing_ok=True)
+        return r.returncode, calls
+
+    def test_parses(self):
         self.assertEqual(subprocess.run(["bash", "-n", str(ROOT / "scripts" / "run_docker.sh")]).returncode, 0)
+
+    def test_an_existing_container_is_entered_again(self):
+        inspect = "inspect -f {{.Config.Image}} tester"
+        enter = [inspect, "start tester", "exec -it -w /workspace tester bash"]
+        self.assertEqual(self.run_docker(existing="rocm/sgl-dev:old"), (0, enter))
+        self.assertEqual(self.run_docker(existing="rocm/sgl-dev:old", image="rocm/sgl-dev:old"), (0, enter))
+        self.assertEqual(self.run_docker(existing="rocm/sgl-dev:old", image="rocm/sgl-dev:new"), (1, [inspect]))
+
+    def test_a_new_container_starts_in_workspace(self):
+        rc, calls = self.run_docker(image="rocm/sgl-dev:new")
+        self.assertEqual((rc, len(calls), calls[-1].split()[:2]), (0, 2, ["run", "-it"]))
+        run = calls[-1]
+        self.assertIn("-w /workspace", run)
+        self.assertIn("-e PETRA_HOST_HOME=%s" % (self.tmp / "home"), run)
+        self.assertTrue(run.endswith("--name tester rocm/sgl-dev:new"), run)
 
 
 class ClaudeCodeTest(unittest.TestCase):
@@ -174,6 +237,16 @@ class ClaudeCodeTest(unittest.TestCase):
             self.assertEqual(bs.ensure_claude_link(s)[0], "skipped")
         with mock.patch.object(bs.shutil, "which", return_value=str(link)), Quiet():
             self.assertEqual(bs.ensure_claude_link(s)[0], "kept")
+
+    def test_link_to_the_install_in_petra_host_home(self):
+        exe = make_exe(self.tmp / "u" / ".local" / "bin" / "claude")
+        link = self.tmp / "usr-local-bin-claude"
+        s = S("/", HOME="/root", PETRA_HOME=str(make_checkout(self.tmp / "workspace" / "Petra")),
+              PETRA_HOST_HOME=str(self.tmp / "u"))
+        with mock.patch.object(bs, "CONTAINER_CLAUDE", str(link)), \
+                mock.patch.object(bs.shutil, "which", return_value=None), Quiet():
+            self.assertEqual(bs.ensure_claude_link(s)[0], "added")
+        self.assertEqual(os.readlink(link), str(exe))
 
     def test_no_link_without_a_host_install(self):
         co = make_checkout(self.tmp / "u" / "Petra")

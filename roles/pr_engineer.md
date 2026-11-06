@@ -32,7 +32,9 @@ Inputs: `round` (1 after the work packages of an earlier round were made).
    verification comment for that PR instead, at the same path.
 6. **Push command:** the exact `git push` the human should run. Do not run it. First give everything
    back to its owner (`scripts/restore_owner.sh <worktree>`, the task's clone with its own `.git`) and check
-   that nothing in `.git` is still root's (`env_hygiene.md`), so the push also works from the host.
+   that nothing in `.git` is still root's (`env_hygiene.md`), so the push also works from the host once the
+   run directory is there. Give the command for the worktree where it is, and say that the human runs it in
+   the container, or copies RUN_DIR to their home on the host first (README step 5).
 
 Return:
 

@@ -111,18 +111,21 @@ functional kernel and handed back once with the failing case as a test (`kernel_
 outside Claude Code, GEAK's workflow runtime is what executes `petra.js` (other CLIs, the dry run).
 
 Petra runs inside the framework's ROCm container as root, as GEAK does, next to the GPUs and the
-framework's Python environment. Claude Code is installed once on the host and linked into the
-container, with root's Claude Code state kept on the host too; the checkouts stay on the host, and
-whatever a run writes into them as root goes back to their owner (`scripts/restore_owner.sh`), so
-host-side git and the human's push keep working. Machines are shared: one Petra task runs per machine at a
+framework's Python environment. Each task gets its own container, and what it works on lives in that
+container's `/workspace`, apart from every other container's: Petra's checkout, the run directories and
+the task clones. `scripts/run_docker.sh` takes the user back into an existing container and never
+removes one. Claude Code, installed once on the host, is linked into the container; its state and the
+keys stay in the user's home on the host (`PETRA_HOST_HOME`), shared by their containers. What a run
+writes as root into a checkout on a host mount goes back to its owner (`scripts/restore_owner.sh`).
+Machines are shared: one Petra task runs per machine at a
 time (a lock in `/dev/shm`, `scripts/run_lock.py`; a second run ends as `busy`), a run uses only the
 GPUs Setup pinned (through `HIP_VISIBLE_DEVICES`) and touches only the processes and containers it
 started; the host's Docker socket is not mounted by default. Tasks test the newest sglang: unless the user names an
 image or a container, the container runs the newest daily `rocm/sgl-dev` image for its ROCm and GPU
 (`scripts/latest_image.py`). The image's own full-history checkout, `/sgl-workspace/sglang`, is the
 default framework source: Setup fetches the current main into it without touching its working tree and
-gives each task a standalone clone of that main under the run directory, so the task's branch and
-commits live on the host and outlive the container. Every server and test runs that clone's code, put
+gives each task a standalone clone of that main under the run directory, so the run directory carries
+the task's branch and commits wherever it is copied. Every server and test runs that clone's code, put
 first on `PYTHONPATH`, never the copy of sglang installed in the image.
 
 - Gates G0–G5 (`validation_doctrine.md`), plus mode gates (`issue_repro`, `failing_test`) and the

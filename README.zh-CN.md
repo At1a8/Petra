@@ -65,9 +65,9 @@ kernel 级的工作——调优 Petra 为某个特性写的 kernel，或者 kern
 
 ## 安装
 
-Petra 像 GEAK 一样，以 root 身份运行在 ROCm 容器里：Claude Code、Petra、git 以及框架的服务和测试都在容器里运行，紧挨着 GPU 和框架的 Python 环境。容器是一次性的（`scripts/run_docker.sh` 每次都新建一个），所以需要长期保留的东西都放在宿主机的 `/home` 下，并以相同路径挂载进容器：只装一次的 Claude Code、它的状态、各个 checkout 和你的 key。一次运行以 root 身份写进 checkout 的文件会还给原来的属主（[`scripts/restore_owner.sh`](scripts/restore_owner.sh)、[`knowledge/env_hygiene.md`](knowledge/env_hygiene.md)），所以宿主机上的 git 和你的 `git push` 照常可用。
+Petra 像 GEAK 一样，以 root 身份运行在 ROCm 容器里：Claude Code、Petra、git 以及框架的服务和测试都在容器里运行，紧挨着 GPU 和框架的 Python 环境。每个任务用一个自己的容器，任务用到的一切都放在这个容器的 `/workspace` 里：Petra 的 checkout、各个运行目录，以及运行要修改的框架 clone。容器之间不共享 `/workspace`，所以互不干扰；它随所在的容器保留，容器删除时一起删除。所有容器都要用的东西留在宿主机上你的 home 里，并以相同路径挂载进容器：只装一次的 Claude Code、它的状态和你的 key。
 
-除了容器（run_docker.sh 按设计会替换它），每一步都可以重复执行：先检查，保留已有的，只补缺的。命令里的 `检查 || 动作` 表示只有检查不通过时才执行动作：在新机器上每个动作都会执行，再运行一次则全部跳过。不会删除、覆盖或重新克隆任何东西。
+每一步都可以重复执行：先检查，保留已有的，只补缺的；再次运行 run_docker.sh 会回到原来的容器。命令里的 `检查 || 动作` 表示只有检查不通过时才执行动作：在新机器上每个动作都会执行，再运行一次则全部跳过。不会删除、覆盖或重新克隆任何东西。
 
 ### 宿主机需要什么
 
@@ -94,51 +94,49 @@ command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || curl -fsSL https:/
 - **LLM key（必填）。** 写的是 AMD LLM 网关 key 时，第 3 步会让 Claude Code 走这个网关（`https://llm-api.amd.com/Unified`，key 放在 `Ocp-Apim-Subscription-Key` 请求头里），网关按 Claude 模型的常用名字提供服务。不在 AMD 内部时，改写成 `export ANTHROPIC_API_KEY=sk-ant-...`，或者其他网关（`ANTHROPIC_BASE_URL` 加上 `ANTHROPIC_AUTH_TOKEN` 或 `ANTHROPIC_CUSTOM_HEADERS`）。用 Claude 订阅时不写 key，在首次启动时登录（第 4 步）。
 - **GitHub token（强烈建议）。** scan 和 issue 运行要通过 GitHub API 读取 issue、PR 和 CI 跟踪记录。没有 token 时，GitHub 对每个 IP 地址每小时只允许 60 次请求、每分钟 10 次搜索，同一出口 IP 下的所有人共用这个额度，扫描会非常慢，还可能中途停下；有 token 时每小时 5000 次。只读权限就够了，Petra 从不 push 也不发帖：在 github.com 上进入 Settings → Developer settings → Personal access tokens → Fine-grained tokens，权限选 *Public repositories (read-only)*（不勾选任何权限的 classic token 也可以）。
 
-### 2. 获取 Petra 并启动容器（宿主机）
+### 2. 启动容器（宿主机）
 
 ```bash
-[ -d ~/Petra/.git ] || git clone https://github.com/At1a8/Petra ~/Petra   # ~/Petra 已存在时跳过
-~/Petra/scripts/run_docker.sh    # NAME 默认是你的用户名
+bash <(curl -fsSL https://raw.githubusercontent.com/At1a8/Petra/main/scripts/run_docker.sh)    # NAME 默认是你的用户名
 ```
 
-第一行把 Petra 的代码放到 `~/Petra`：新机器上还没有 `~/Petra/.git`，所以会执行克隆；已经有了就什么都不做。克隆下来的代码里包含 `scripts/run_docker.sh`，第二行运行的就是它；第 3 步再让容器能运行 Petra。
-
-[`scripts/run_docker.sh`](scripts/run_docker.sh) 就是常见的 ROCm `run_docker.sh`：一个带 GPU 的特权容器，以相同路径挂载 `/home` 和存在的数据目录（`/data`、`/mnt` 等），并打开一个 root shell。和很多同类脚本不同，它默认不挂载宿主机的 Docker socket（`DOCKER_SOCKET=1` 才挂）：Petra 的 agent 以 root 身份、自动批准权限运行，挂上 socket 就能操作宿主机上的所有容器。
+这一行下载 [`scripts/run_docker.sh`](scripts/run_docker.sh) 并运行它，所以宿主机上不需要 Petra 的代码；在 Petra 的 checkout 里直接运行 `scripts/run_docker.sh` 效果相同。它就是常见的 ROCm `run_docker.sh`：一个带 GPU 的特权容器，以相同路径挂载 `/home` 和存在的数据目录（`/data`、`/mnt` 等），并在容器的 `/workspace` 里打开一个 root shell。和很多同类脚本不同，它默认不挂载宿主机的 Docker socket（`DOCKER_SOCKET=1` 才挂）：Petra 的 agent 以 root 身份、自动批准权限运行，挂上 socket 就能操作宿主机上的所有容器。
 
 - **镜像。** 任务要在最新的 sglang 上测试，所以默认使用 ROCm 10、MI35x 下最新的每日 `rocm/sgl-dev` 镜像（[`scripts/latest_image.py`](scripts/latest_image.py)，例如 `v0.5.23-rocm10-mi35x-20261103`；同一页面上的 `miles` 镜像用于强化学习，会被跳过）。每天的新镜像在第一次使用时拉取，约 43 GB。MI30x 设置 `IMAGE_VARIANT=rocm10-mi30x`；要固定镜像，设置 `IMAGE=rocm/sgl-dev:<tag>`。
-- **测的是哪份代码。** 镜像提供 PyTorch、aiter、sgl-kernel，以及它自带的 sglang checkout `/sgl-workspace/sglang`（带完整历史）：这就是 Petra 默认的框架来源，不需要另外克隆或指定 sglang。Setup 会把当前的 main fetch 到这个 checkout 里，但不改动它的工作区（保持镜像构建时的样子），然后在运行目录下给每个任务建一份自己的 clone，基于这个 main（借用 checkout 里已有的对象：几秒钟，约 0.7 GB）。任务的代码放在 `PYTHONPATH` 最前面运行；它的 clone、分支和 commit 都在宿主机上，容器换掉也不会丢。运行记录会写下镜像、镜像里 sglang 的版本和任务的基础 commit。
-- **每次都是新容器。** 它会先删除同名的旧容器，连同其中仍在运行的东西。要回到正在运行的容器，在容器里开一个 shell（`docker exec -it <name> bash`），不要再次运行 run_docker.sh。你自己的 run_docker.sh 也可以用，只要它以相同路径挂载 `/home`。
+- **测的是哪份代码。** 镜像提供 PyTorch、aiter、sgl-kernel，以及它自带的 sglang checkout `/sgl-workspace/sglang`（带完整历史）：这就是 Petra 默认的框架来源，不需要另外克隆或指定 sglang。Setup 会把当前的 main fetch 到这个 checkout 里，但不改动它的工作区（保持镜像构建时的样子），然后在运行目录下给每个任务建一份自己的 clone，基于这个 main（借用 checkout 里已有的对象：几秒钟，约 0.7 GB）。任务的代码放在 `PYTHONPATH` 最前面运行；它的 clone 连同分支和 commit 都在运行目录里。运行记录会写下镜像、镜像里 sglang 的版本和任务的基础 commit。
+- **一个任务一个容器。** 用同一个 `NAME` 再次运行时，run_docker.sh 会回到那个容器（已停止的会先启动），`/workspace` 保持你离开时的样子：它从不删除容器。下一个任务换个名字开新容器（`NAME=<name>`），用的是最新的镜像；不再需要的容器用 `docker rm -f <name>` 删除，它的 `/workspace` 也随之删除。不管有多少个容器，一台机器同时只跑一个 Petra 任务（[运行](#运行)）。你自己的 run_docker.sh 也可以用，只要它以相同路径挂载你的 home，并把它作为 `PETRA_HOST_HOME` 传进容器（`-e PETRA_HOST_HOME=$HOME`）。
 
 此时还不能调用 `claude`：宿主机上的程序通过 `/home` 挂载出现在容器里，但不在 root 的 `PATH` 上（`claude: command not found`）。第 3 步会创建链接；容器里不安装任何东西。
 
-### 3. 在容器里配置 Petra（每个新容器都要做）
+### 3. 在容器里配置 Petra（每个容器做一次）
 
-第 2 步已经把 Petra 的代码放在 `~/Petra` 了；这一步让新容器能运行它，具体做什么见下表。
+这一步把 Petra 放进容器的 `/workspace`，并让容器能运行它，具体做什么见下表：
 
 ```bash
-cd /home/<you>/Petra && python3 -B -m petra.bootstrap
+[ -d /workspace/Petra/.git ] || git clone https://github.com/At1a8/Petra /workspace/Petra
+cd /workspace/Petra && python3 -B -m petra.bootstrap
 source ~/.bashrc
 claude --version    # 宿主机上的 Claude Code
 ```
 
 | 步骤 | 在新容器里做什么 |
 |---|---|
-| `claude` | 创建链接 `/usr/local/bin/claude`，指向宿主机的 `/home/<you>/.local/bin/claude`；只有宿主机上没有 Claude Code 时才在容器里安装 |
-| Claude Code 状态 | 保存在宿主机的 `/home/<you>/.petra/claude`（`CLAUDE_CONFIG_DIR`，与你自己的 `~/.claude` 分开）：首次启动时的回答和 `/login` 登录不会随容器消失 |
-| git | 信任挂载进来的 checkout，它们属于你而不是 root（`safe.directory '*'`） |
-| shell | 在 root 的 `~/.bashrc` 里设置 `PYTHONDONTWRITEBYTECODE=1`（你的 checkout 里不会出现 root 所有的 `__pycache__`）、`DISABLE_AUTOUPDATER=1`（由宿主机更新 Claude Code），并加载 `/home/<you>/.petra_env`；设置了 `LLM_GATEWAY_KEY` 且没有 `ANTHROPIC_BASE_URL` 时，让 Claude Code 走 AMD LLM 网关 |
+| `claude` | 创建链接 `/usr/local/bin/claude`，指向你在宿主机上的 `~/.local/bin/claude`；只有宿主机上没有 Claude Code 时才在容器里安装 |
+| Claude Code 状态 | 保存在你宿主机上的 `~/.petra/claude`（`CLAUDE_CONFIG_DIR`，与你自己的 `~/.claude` 分开），你的各个容器共用：首次启动时的回答和 `/login` 登录只需做一次 |
+| git | 信任宿主机挂载目录里的 checkout，它们属于你而不是 root（`safe.directory '*'`） |
+| shell | 在 root 的 `~/.bashrc` 里设置 `PYTHONDONTWRITEBYTECODE=1`（你宿主机上的 checkout 里不会出现 root 所有的 `__pycache__`）、`DISABLE_AUTOUPDATER=1`（由宿主机更新 Claude Code），并加载你宿主机上的 `~/.petra_env`；设置了 `LLM_GATEWAY_KEY` 且没有 `ANTHROPIC_BASE_URL` 时，让 Claude Code 走 AMD LLM 网关 |
 | 框架 | 检查镜像里的 `/sgl-workspace/sglang`（Petra 默认的框架来源），原样保留；用 `--framework-dir` 可以改用宿主机上的 checkout（已有的原样使用，缺失时带完整历史克隆） |
 | 检查 | GPU、sglang、API 访问、`GITHUB_TOKEN`，`~/.petra_env` 里设置的也算（只检测） |
 
-`python3 -B` 让这第一次运行不会往 checkout 里写 root 所有的 `__pycache__`。这条命令从不写入 key。
+只有 `/workspace/Petra` 还不存在时才会克隆；bootstrap 从不写入 key。
 
 ### 4. 启动 Claude Code 并交给它任务（容器内）
 
 ```bash
-cd /home/<you>/Petra && IS_SANDBOX=1 claude --dangerously-skip-permissions
+cd /workspace/Petra && IS_SANDBOX=1 claude --dangerously-skip-permissions
 ```
 
-`IS_SANDBOX=1` 让 Claude Code 以 root 身份自动批准权限，Petra 的 agent 需要这一点。第一次启动会问几个问题；回答保存在 `/home/<you>/.petra/claude`，之后的新容器不会再问。其中有三个问题，按默认选项会卡住：
+`IS_SANDBOX=1` 让 Claude Code 以 root 身份自动批准权限，Petra 的 agent 需要这一点。第一次启动会问几个问题；回答保存在你宿主机上的 `~/.petra/claude`，之后的新容器不会再问。其中有三个问题，按默认选项会卡住：
 
 | 问题 | 回答 |
 |---|---|
@@ -149,32 +147,38 @@ cd /home/<you>/Petra && IS_SANDBOX=1 claude --dangerously-skip-permissions
 没有 key 时，改为选择一种登录方式并登录一次。然后输入：
 
 ```
-use /home/<you>/Petra/petra.js with mode=scan, petra_dir=/home/<you>/Petra
+use /workspace/Petra/petra.js with mode=scan, petra_dir=/workspace/Petra
 ```
 
 scan 不改任何代码。它收集上次扫描以来（没有上次扫描时为最近 7 天）开放的 AMD issue、变红的 AMD CI、CUDA 优先的上游改动和硬件差距，排好序，写出 `exp/scan_<time>/task_queue.md`，每项附可以启动它的任务定义。要接手一个任务，并在复现之后停下来确认环境，就给出它的字段：
 
 ```
-use /home/<you>/Petra/petra.js with mode=issue, task=https://github.com/sgl-project/sglang/issues/41299,
-petra_dir=/home/<you>/Petra, model_path=<weights>, gpu_ids=0, stop_after=Reproduce
+use /workspace/Petra/petra.js with mode=issue, task=https://github.com/sgl-project/sglang/issues/41299,
+petra_dir=/workspace/Petra, model_path=<weights>, gpu_ids=0, stop_after=Reproduce
 ```
 
 或者直接用一句话描述，让 Intake 阶段写出任务定义：
 
 ```
-use /home/<you>/Petra/petra.js with petra_dir=/home/<you>/Petra, request="DeepSeek-V4.1 在 MI355X 上
+use /workspace/Petra/petra.js with petra_dir=/workspace/Petra, request="DeepSeek-V4.1 在 MI355X 上
 decode 太慢，帮我优化"
 ```
 
 如果缺了什么（这里缺的是每次测量都用的固定负载），这次运行什么都不启动，返回 `status: needs_input`，每个字段一个问题。在对话里回答后，Claude Code 会用同样的参数加上 `answers={"workload": ...}` 再次运行 `petra.js`。[运行](#运行)一节列出了全部参数。
 
-### 5. 运行结束后（宿主机）
+### 5. 运行结束后（容器内）
 
-过了 Setup 的运行会把报告留在 `/home/<you>/Petra/exp/` 下它自己的运行目录里（PR 准备好时是 `validation_report.md`，其他结局是 `report.md`；运行结果中的 `report_path` 给出路径），旁边就是任务自己的 clone（`wt/`）和它的分支，root 写在那里的文件已经还给你。Petra 从不 push：报告里列出了 PR 描述和确切的 `git -C <worktree> push ...` 命令。请在宿主机上执行它，你的 git 凭据在那里。
+过了 Setup 的运行会把报告留在 `/workspace/Petra/exp/` 下它自己的运行目录里（PR 准备好时是 `validation_report.md`，其他结局是 `report.md`；运行结果中的 `report_path` 给出路径），旁边就是任务自己的 clone（`wt/`）和它的分支。Petra 从不 push：报告里列出了 PR 描述和确切的 `git -C <worktree> push ...` 命令。可以在容器里用有 push 权限的凭据执行它；也可以先把运行目录复制到你宿主机上的 home，再在宿主机上 push，你的 git 凭据在那里（`<run>` 是运行目录的名字）：
+
+```bash
+cp -r /workspace/Petra/exp/<run> "$PETRA_HOST_HOME"/ && /workspace/Petra/scripts/restore_owner.sh "$PETRA_HOST_HOME"/<run>
+```
+
+复制出来的文件属于你而不是 root；在宿主机上，worktree 就是 `~/<run>/wt`。
 
 ### 重复执行与选项
 
-`petra.bootstrap` 的每一步都会报告 `kept`、`installed`、`updated`、`added`、`created`、`skipped` 或 `failed`；最后有一份汇总，"下一步"只列出仍然缺少的内容，任何一步失败时退出码为 1。在新容器里，它几秒钟就能重建链接以及 git、shell 和 Claude Code 状态的设置，什么都不用安装。`--claude-only` 只运行 Claude Code 相关的步骤，`--check` 只运行检查。在容器里，`cd /home/<you> && pip install -v git+https://github.com/At1a8/Petra` 会按 GEAK 的方式执行第 3 步（加 `-v` 时 pip 才显示输出；用了缓存的 wheel 时会跳过）。
+`petra.bootstrap` 的每一步都会报告 `kept`、`installed`、`updated`、`added`、`created`、`skipped` 或 `failed`；最后有一份汇总，"下一步"只列出仍然缺少的内容，任何一步失败时退出码为 1。在新容器里，它几秒钟就能重建链接以及 git、shell 和 Claude Code 状态的设置，什么都不用安装。`--claude-only` 只运行 Claude Code 相关的步骤，`--check` 只运行检查。在容器里，`cd /workspace && pip install -v git+https://github.com/At1a8/Petra` 会按 GEAK 的方式执行第 3 步，把 Petra 克隆到 `/workspace/Petra`（加 `-v` 时 pip 才显示输出；用了缓存的 wheel 时会跳过）。
 
 | 变量 | 使用者 | 默认值 |
 |---|---|---|
@@ -183,9 +187,10 @@ decode 太慢，帮我优化"
 | `DOCKER_SOCKET` | `scripts/run_docker.sh` | 不设置；设为 `1` 时额外挂载宿主机的 Docker socket 和 `docker` |
 | `PETRA_LOCK_FILE` | `scripts/run_lock.py` | `/dev/shm/petra-run.lock`，这台机器"一个任务"的锁 |
 | `PETRA_HOME` | bootstrap | `./Petra`，或你所在的 checkout |
+| `PETRA_HOST_HOME` | `scripts/run_docker.sh`、bootstrap | 你在宿主机上的 home（`$HOME`），容器从这里找到你的 Claude Code、它的状态和 `~/.petra_env` |
 | `PETRA_REPO_URL`、`PETRA_REF` | bootstrap | `https://github.com/At1a8/Petra.git`，它的默认分支 |
 | `CLAUDE_VERSION`、`CLAUDE_BIN_DIR` | bootstrap | `latest`，`~/.local/bin` |
-| `CLAUDE_CONFIG_DIR` | bootstrap、Claude Code | 容器里的 root 用 `/home/<you>/.petra/claude`；已经设置时原样使用 |
+| `CLAUDE_CONFIG_DIR` | bootstrap、Claude Code | 容器里的 root 用你宿主机上的 `~/.petra/claude`；已经设置时原样使用 |
 | `LLM_GATEWAY_KEY` | `~/.petra_env`、容器的 shell 配置 | 不设置；设置后 Claude Code 走 AMD LLM 网关，除非 `ANTHROPIC_BASE_URL` 指定了别的地址 |
 | `PETRA_FRAMEWORK_DIR`、`PETRA_FRAMEWORK_REPO` | bootstrap：`--framework-dir`、`--framework-repo` | 镜像里的 `/sgl-workspace/sglang`；sglang |
 | `PETRA_SKIP_BOOTSTRAP` | bootstrap | 不设置；设置后安装这个包时没有任何副作用（CI、构建镜像） |
@@ -250,7 +255,7 @@ python3 scripts/run_lock.py release --force   # 那个运行已经中断时，�
 | `scripts/audit_platform_gates.py` | 换到新架构时需要重新检查的平台门控（在 gfx1250 上为真的能力判断、wave32 假设） |
 | `scripts/audit_host_syncs.py` | 热路径上的 host-device 同步和拷贝候选点（供 profile 参考的线索） |
 
-`scripts/restore_owner.sh`（POSIX sh）把 root 在容器里写下的文件还给所在 checkout 的属主；每个 agent 在 git 写操作之后都会运行它（[`knowledge/env_hygiene.md`](knowledge/env_hygiene.md)）。`scripts/check_framework_skills.py --framework-dir <dir>` 拿 skill 索引和框架 checkout 对照：索引里提到但已经不存在的 skill，以及索引还没收录的新 skill（scout 每次 scan 都会运行它）。`scripts/latest_image.py [--variant rocm10-mi30x]` 输出最新的每日 sglang 镜像（`run_docker.sh` 从它启动；director 拿运行所用的镜像和它比较）。`scripts/run_lock.py` 保证一台机器同时只跑一个 Petra 任务（`acquire`、`release`、`status`）。
+`scripts/restore_owner.sh`（POSIX sh）把 root 在容器里写到宿主机挂载目录中的文件还给属主（`/workspace` 里的不用还）；每个 agent 在 git 写操作之后都会运行它（[`knowledge/env_hygiene.md`](knowledge/env_hygiene.md)）。`scripts/check_framework_skills.py --framework-dir <dir>` 拿 skill 索引和框架 checkout 对照：索引里提到但已经不存在的 skill，以及索引还没收录的新 skill（scout 每次 scan 都会运行它）。`scripts/latest_image.py [--variant rocm10-mi30x]` 输出最新的每日 sglang 镜像（`run_docker.sh` 从它启动；director 拿运行所用的镜像和它比较）。`scripts/run_lock.py` 保证一台机器同时只跑一个 Petra 任务（`acquire`、`release`、`status`）。
 
 ## 测试
 

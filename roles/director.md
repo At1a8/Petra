@@ -33,8 +33,9 @@ that passes), `resume_run_dir`, `lock_idle_hours`.
    checkout's objects so only new commits are downloaded, and standing alone afterwards:
    `git clone --reference <framework_dir> --dissociate <its origin URL> RUN_DIR/wt`, then
    `git -C RUN_DIR/wt checkout -b petra/<slug> <base>` (the base commit the task names, default
-   `origin/main`). The clone, its branch and its commits live under RUN_DIR on the host, so they outlive
-   the container. Give them back to their owner (`scripts/restore_owner.sh RUN_DIR`; `env_hygiene.md`).
+   `origin/main`). The clone, with its branch and commits, is a standalone repository inside RUN_DIR, so
+   RUN_DIR carries them wherever it is copied. Give them back to their owner (`scripts/restore_owner.sh
+   RUN_DIR`, which has nothing to do in the container's `/workspace`; `env_hygiene.md`).
    Never change a checkout a running server imports from.
 3. **Environment.** Pin the framework commit, container image, ROCm and PyTorch versions and the GPU set,
    and return it as `gpu_ids`: the given one, or, when none was given, GPUs that `rocm-smi` shows with no
