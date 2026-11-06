@@ -15,8 +15,9 @@ state warns and leaves it alone.
   claude-state  (root in a container) keep Claude Code's state on the host, in ~/.petra/claude next to
                 the keys (CLAUDE_CONFIG_DIR): first-start answers and a /login outlive the container
   git           (root in a container) trust the mounted checkouts, which belong to another user
-  shell         (root in a container) no __pycache__ in the checkouts, no Claude Code self-update, and
-                the keys kept on the host in ~/.petra_env
+  shell         (root in a container) no __pycache__ in the checkouts, no Claude Code self-update, the
+                keys kept on the host in ~/.petra_env, and with LLM_GATEWAY_KEY Claude Code on the AMD LLM
+                gateway
   framework     (--framework-dir) clone the framework, with its whole history, if the directory is missing
   checks        git, docker (host only), ROCm, sglang, Node.js, API access, GitHub token (detect only)
 
@@ -58,6 +59,17 @@ STATE_END = "# <<< petra: Claude Code state on the host <<<"
 # Root in the container must not leave root-owned __pycache__ in the host's checkouts, and must not
 # update the host's Claude Code install (the host updates it).
 CONTAINER_ENV = {"PYTHONDONTWRITEBYTECODE": "1", "DISABLE_AUTOUPDATER": "1"}
+# The AMD LLM gateway speaks the Anthropic Messages API and authenticates on the
+# Ocp-Apim-Subscription-Key header alone; the same key as a bearer token only keeps Claude Code from
+# asking for a login, and the gateway ignores it.
+AMD_GATEWAY_URL = "https://llm-api.amd.com/Unified"
+GATEWAY_ENV = (
+    'if [ -n "$LLM_GATEWAY_KEY" ] && [ -z "$ANTHROPIC_BASE_URL" ]; then\n'
+    '  export ANTHROPIC_BASE_URL=%s\n'
+    '  export ANTHROPIC_CUSTOM_HEADERS="Ocp-Apim-Subscription-Key: $LLM_GATEWAY_KEY"\n'
+    '  export ANTHROPIC_AUTH_TOKEN="$LLM_GATEWAY_KEY"\n'
+    'fi' % AMD_GATEWAY_URL
+)
 
 
 def _styles(stream) -> tuple[str, str]:
@@ -385,6 +397,7 @@ def ensure_shell_env(s: dict) -> tuple[str, str]:
     keys = keys_file(s)
     if keys:
         lines.append('[ -r "%s" ] && . "%s"' % (keys, keys))
+    lines.append(GATEWAY_ENV)
     if not _append(rc, "\n%s\n%s\n%s\n" % (ENV_BEGIN, "\n".join(lines), ENV_END)):
         return "failed", rc
     log("shell: added %s%s to %s" % (", ".join(CONTAINER_ENV), " and %s" % keys if keys else "", rc))
@@ -479,7 +492,7 @@ def ensure_framework(s: dict) -> tuple[str, str]:
 
 def api_configured(env, user_home: str) -> bool:
     config_dir = env.get("CLAUDE_CONFIG_DIR") or os.path.join(user_home, ".claude")
-    return bool(env.get("ANTHROPIC_API_KEY") or env.get("ANTHROPIC_AUTH_TOKEN")
+    return bool(env.get("LLM_GATEWAY_KEY") or env.get("ANTHROPIC_API_KEY") or env.get("ANTHROPIC_AUTH_TOKEN")
                 or (env.get("ANTHROPIC_BASE_URL") and env.get("ANTHROPIC_CUSTOM_HEADERS"))
                 or os.path.isfile(os.path.join(config_dir, ".credentials.json")))
 
@@ -545,11 +558,12 @@ def next_steps(s: dict, statuses: dict, found: dict | None = None, path_env: str
             else "(pick one; keep it in %s):" % rc_file(s)
         steps.append([
             "Give Claude Code API access %s" % where,
-            "a. Anthropic API:       " + hl("export ANTHROPIC_API_KEY=sk-ant-..."),
-            "b. a gateway or proxy:  " + hl("export ANTHROPIC_BASE_URL=https://your-gateway"),
+            "a. AMD LLM gateway:     " + hl("export LLM_GATEWAY_KEY=<your key>") + "   (%s)" % AMD_GATEWAY_URL,
+            "b. Anthropic API:       " + hl("export ANTHROPIC_API_KEY=sk-ant-..."),
+            "c. another gateway:     " + hl("export ANTHROPIC_BASE_URL=https://your-gateway"),
             "                        " + hl("export ANTHROPIC_AUTH_TOKEN=your-token"),
             "   (a gateway that wants its own header: " + hl('export ANTHROPIC_CUSTOM_HEADERS="Header-Name: <key>"') + ")",
-            "c. interactive login:   " + hl("claude") + "   then /login"
+            "d. interactive login:   " + hl("claude") + "   then /login"
             + ("  (kept in %s)" % state if state else "  (lost with the container)" if keys else ""),
         ])
     if not claude_only:
@@ -559,7 +573,7 @@ def next_steps(s: dict, statuses: dict, found: dict | None = None, path_env: str
         if in_container():
             start += ["The first start asks a few questions %s; answer these, the defaults would stop you:"
                       % ("once (the answers are kept in %s)" % state if state else "in every new container"),
-                      "  use the API key from your environment?  " + hl("Yes"),
+                      "  use the API key from your environment?  " + hl("Yes") + "   (asked only for an Anthropic API key)",
                       "  trust this folder?                      " + hl("Yes, I trust this folder"),
                       "  Bypass Permissions mode                 " + hl("Yes, I accept")]
         steps.append(start)

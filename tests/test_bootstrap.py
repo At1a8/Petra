@@ -287,6 +287,28 @@ class ShellRcTest(unittest.TestCase):
                               "_", str(self.rc)], env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True).stdout
         self.assertEqual(out.strip(), "1 1 sk-test")
 
+    @unittest.skipUnless(shutil.which("bash"), "needs bash")
+    def test_an_amd_gateway_key_points_claude_code_at_the_gateway(self):
+        host = self.home / "u"
+        co = make_checkout(host / "Petra")
+        make_exe(host / ".local" / "bin" / "claude")
+        (host / ".petra_env").write_text("export LLM_GATEWAY_KEY=k123\n")
+        s = S("/", HOME=str(self.home), SHELL="/bin/bash", PETRA_HOME=str(co))
+        with Quiet():
+            self.assertEqual(bs.ensure_shell_env(s)[0], "added")
+        show = 'source "$1"; echo "$ANTHROPIC_BASE_URL|$ANTHROPIC_CUSTOM_HEADERS|$ANTHROPIC_AUTH_TOKEN"'
+        out = subprocess.run(["bash", "-c", show, "_", str(self.rc)], env={"PATH": "/usr/bin:/bin"},
+                             capture_output=True, text=True).stdout
+        self.assertEqual(out.strip(), "%s|Ocp-Apim-Subscription-Key: k123|k123" % bs.AMD_GATEWAY_URL)
+        out = subprocess.run(["bash", "-c", show, "_", str(self.rc)], capture_output=True, text=True,
+                             env={"PATH": "/usr/bin:/bin", "ANTHROPIC_BASE_URL": "https://mine"}).stdout
+        self.assertEqual(out.strip(), "https://mine||", "a gateway already chosen is kept")
+        (host / ".petra_env").write_text("export ANTHROPIC_API_KEY=sk-test\n")
+        out = subprocess.run(["bash", "-c", show, "_", str(self.rc)], env={"PATH": "/usr/bin:/bin"},
+                             capture_output=True, text=True).stdout
+        self.assertEqual(out.strip(), "||", "without the gateway key nothing changes")
+        self.assertTrue(bs.api_configured({"LLM_GATEWAY_KEY": "k"}, str(self.home)))
+
 
 class ClaudeStateTest(unittest.TestCase):
     """Root's Claude Code state goes to ~/.petra/claude of the checkout's owner, so it outlives the container."""

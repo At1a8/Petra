@@ -111,7 +111,8 @@ overwritten or re-cloned.
 - Linux with AMD Instinct GPUs (MI300 or MI350 series) and the ROCm driver loaded (`/dev/kfd` exists).
 - Docker you can run (your user in the `docker` group, or sudo), git, curl, python3 and tmux.
 - Network access to claude.ai, github.com and Docker Hub, and about 45 GB of disk per sglang image.
-- An Anthropic API key or a gateway; without either, a Claude subscription to log in with.
+- An AMD LLM gateway key (`LLM_GATEWAY_KEY`), an Anthropic API key or another gateway; without any, a
+  Claude subscription to log in with.
 - Model weights in a directory the container mounts (`/data`, `/mnt`, `/home`, ...): Petra never
   downloads weights.
 
@@ -120,15 +121,21 @@ overwritten or re-cloned.
 ```bash
 command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash
 ~/.local/bin/claude --version    # 2.1.177 or later: the first with the Workflow tool petra.js runs in
-[ -e ~/.petra_env ] || (umask 077 && echo 'export ANTHROPIC_API_KEY=sk-ant-...' > ~/.petra_env)
+[ -e ~/.petra_env ] || (umask 077 && echo 'export LLM_GATEWAY_KEY=<your AMD LLM gateway key>' > ~/.petra_env)
 ```
 
 The native installer puts Claude Code in `~/.local/bin`, inside your home, which the container mounts;
 that is how the container calls it. The host keeps it up to date; the container never updates it.
 
-`~/.petra_env` keeps the keys on the host, readable only by you; every container loads it. A gateway
-goes in the same file (`ANTHROPIC_BASE_URL` with `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_CUSTOM_HEADERS`),
-and so does `GITHUB_TOKEN`, without which scan and issue runs get only 10 GitHub searches a minute.
+Put your own key in place of `<your AMD LLM gateway key>` before you run the last line: it writes the
+file only when there is none, so a key is changed later by editing `~/.petra_env`.
+
+`~/.petra_env` keeps the keys on the host, readable only by you; every container loads it. With the
+AMD LLM gateway key, step 3 points Claude Code at the gateway (`https://llm-api.amd.com/Unified`, the
+key in its `Ocp-Apim-Subscription-Key` header), which serves the Claude models under their usual
+names. Outside AMD, write `export ANTHROPIC_API_KEY=sk-ant-...` instead; another gateway goes in the
+same file (`ANTHROPIC_BASE_URL` with `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_CUSTOM_HEADERS`), and so does
+`GITHUB_TOKEN`, without which scan and issue runs get only 10 GitHub searches a minute.
 With a Claude subscription instead of a key, leave the key out and log in at the first start (step 4).
 
 ### 2. Start the container (host)
@@ -175,7 +182,7 @@ claude --version    # the host's Claude Code
 | `claude` | a link `/usr/local/bin/claude` to the host's `/home/<you>/.local/bin/claude`; Claude Code is installed in the container only when the host has none |
 | Claude Code state | kept on the host in `/home/<you>/.petra/claude` (`CLAUDE_CONFIG_DIR`, apart from your own `~/.claude`): the first-start answers and a `/login` outlive the container |
 | git | trusts the mounted checkouts, which belong to you, not root (`safe.directory '*'`) |
-| shell | root's `~/.bashrc` gets `PYTHONDONTWRITEBYTECODE=1` (no root-owned `__pycache__` in your checkouts), `DISABLE_AUTOUPDATER=1` (the host updates Claude Code) and loads `/home/<you>/.petra_env` |
+| shell | root's `~/.bashrc` gets `PYTHONDONTWRITEBYTECODE=1` (no root-owned `__pycache__` in your checkouts), `DISABLE_AUTOUPDATER=1` (the host updates Claude Code) and loads `/home/<you>/.petra_env`; with `LLM_GATEWAY_KEY` and no `ANTHROPIC_BASE_URL`, it points Claude Code at the AMD LLM gateway |
 | framework (`--framework-dir`) | an existing checkout is used as it is (a shallow one is reported, not deepened); a missing one is cloned with its whole history (`--filter=blob:none`) and given to you |
 | checks | GPUs, sglang, API access, `GITHUB_TOKEN` (detect only) |
 
@@ -194,7 +201,7 @@ containers skip them. Three of the defaults would stop you:
 
 | Question | Answer |
 |---|---|
-| Do you want to use this API key? (the one from `~/.petra_env`) | **Yes**; the default, No, asks you to log in instead |
+| Do you want to use this API key? (asked only for an `ANTHROPIC_API_KEY`; the gateway key is not) | **Yes**; the default, No, asks you to log in instead |
 | Is this a project you trust? | **Yes, I trust this folder**; the default exits |
 | Bypass Permissions mode | **Yes, I accept**; the default exits |
 
@@ -255,6 +262,7 @@ step 3 the GEAK way (pip shows the output only with `-v`; a cached wheel skips i
 | `PETRA_REPO_URL`, `PETRA_REF` | bootstrap | `https://github.com/At1a8/Petra.git`, its default branch |
 | `CLAUDE_VERSION`, `CLAUDE_BIN_DIR` | bootstrap | `latest`, `~/.local/bin` |
 | `CLAUDE_CONFIG_DIR` | bootstrap, Claude Code | `/home/<you>/.petra/claude` for root in the container; when already set, used as it is |
+| `LLM_GATEWAY_KEY` | `~/.petra_env`, the container's shell settings | unset; set, Claude Code runs on the AMD LLM gateway unless `ANTHROPIC_BASE_URL` names another |
 | `PETRA_FRAMEWORK_DIR`, `PETRA_FRAMEWORK_REPO` | bootstrap: `--framework-dir`, `--framework-repo` | none (step skipped); sglang |
 | `PETRA_SKIP_BOOTSTRAP` | bootstrap | unset; set it to install the package with no side effects (CI, images) |
 

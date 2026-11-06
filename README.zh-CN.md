@@ -74,7 +74,7 @@ Petra 像 GEAK 一样，以 root 身份运行在 ROCm 容器里：Claude Code、
 - 装有 AMD Instinct GPU（MI300 或 MI350 系列）且已加载 ROCm 驱动的 Linux（存在 `/dev/kfd`）。
 - 你能使用的 Docker（用户在 `docker` 组里，或者有 sudo），以及 git、curl、python3 和 tmux。
 - 能访问 claude.ai、github.com 和 Docker Hub；每个 sglang 镜像约需 45 GB 磁盘。
-- 一个 Anthropic API key 或网关；两者都没有时，用 Claude 订阅账号登录。
+- 一个 AMD LLM 网关 key（`LLM_GATEWAY_KEY`）、Anthropic API key 或其他网关；都没有时，用 Claude 订阅账号登录。
 - 模型权重放在会挂载进容器的目录里（`/data`、`/mnt`、`/home` 等）：Petra 从不下载权重。
 
 ### 1. 安装 Claude Code 并保存 key（宿主机）
@@ -82,12 +82,14 @@ Petra 像 GEAK 一样，以 root 身份运行在 ROCm 容器里：Claude Code、
 ```bash
 command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash
 ~/.local/bin/claude --version    # 需要 2.1.177 或更高版本：从这个版本起才有 petra.js 运行所需的 Workflow 工具
-[ -e ~/.petra_env ] || (umask 077 && echo 'export ANTHROPIC_API_KEY=sk-ant-...' > ~/.petra_env)
+[ -e ~/.petra_env ] || (umask 077 && echo 'export LLM_GATEWAY_KEY=<your AMD LLM gateway key>' > ~/.petra_env)
 ```
 
 原生安装器把 Claude Code 装在 `~/.local/bin`，它在你的 home 里，而容器会挂载这个目录，容器就是这样调用它的。宿主机负责更新它，容器从不更新它。
 
-`~/.petra_env` 把 key 保存在宿主机上，只有你能读取，每个容器都会加载它。网关配置也写在这个文件里（`ANTHROPIC_BASE_URL` 加上 `ANTHROPIC_AUTH_TOKEN` 或 `ANTHROPIC_CUSTOM_HEADERS`），`GITHUB_TOKEN` 也是；没有它，scan 和 issue 运行每分钟只能做 10 次 GitHub 搜索。如果用 Claude 订阅而不是 key，就不写 key，在首次启动时登录（第 4 步）。
+运行最后一行之前，先把 `<your AMD LLM gateway key>` 换成你自己的 key：这条命令只在文件不存在时才会写入，所以以后要换 key，直接编辑 `~/.petra_env`。
+
+`~/.petra_env` 把 key 保存在宿主机上，只有你能读取，每个容器都会加载它。写的是 AMD LLM 网关 key 时，第 3 步会让 Claude Code 走这个网关（`https://llm-api.amd.com/Unified`，key 放在 `Ocp-Apim-Subscription-Key` 请求头里），网关按 Claude 模型的常用名字提供服务。不在 AMD 内部时，改写成 `export ANTHROPIC_API_KEY=sk-ant-...`；其他网关的配置也写在这个文件里（`ANTHROPIC_BASE_URL` 加上 `ANTHROPIC_AUTH_TOKEN` 或 `ANTHROPIC_CUSTOM_HEADERS`），`GITHUB_TOKEN` 也是；没有它，scan 和 issue 运行每分钟只能做 10 次 GitHub 搜索。如果用 Claude 订阅而不是 key，就不写 key，在首次启动时登录（第 4 步）。
 
 ### 2. 启动容器（宿主机）
 
@@ -118,7 +120,7 @@ claude --version    # 宿主机上的 Claude Code
 | `claude` | 创建链接 `/usr/local/bin/claude`，指向宿主机的 `/home/<you>/.local/bin/claude`；只有宿主机上没有 Claude Code 时才在容器里安装 |
 | Claude Code 状态 | 保存在宿主机的 `/home/<you>/.petra/claude`（`CLAUDE_CONFIG_DIR`，与你自己的 `~/.claude` 分开）：首次启动时的回答和 `/login` 登录不会随容器消失 |
 | git | 信任挂载进来的 checkout，它们属于你而不是 root（`safe.directory '*'`） |
-| shell | 在 root 的 `~/.bashrc` 里设置 `PYTHONDONTWRITEBYTECODE=1`（你的 checkout 里不会出现 root 所有的 `__pycache__`）、`DISABLE_AUTOUPDATER=1`（由宿主机更新 Claude Code），并加载 `/home/<you>/.petra_env` |
+| shell | 在 root 的 `~/.bashrc` 里设置 `PYTHONDONTWRITEBYTECODE=1`（你的 checkout 里不会出现 root 所有的 `__pycache__`）、`DISABLE_AUTOUPDATER=1`（由宿主机更新 Claude Code），并加载 `/home/<you>/.petra_env`；设置了 `LLM_GATEWAY_KEY` 且没有 `ANTHROPIC_BASE_URL` 时，让 Claude Code 走 AMD LLM 网关 |
 | 框架（`--framework-dir`） | 已有的 checkout 原样使用（浅克隆只会提示，不会加深）；缺失时带完整历史克隆（`--filter=blob:none`），并把属主交给你 |
 | 检查 | GPU、sglang、API 访问、`GITHUB_TOKEN`（只检测） |
 
@@ -134,7 +136,7 @@ cd /home/<you>/Petra && IS_SANDBOX=1 claude --dangerously-skip-permissions
 
 | 问题 | 回答 |
 |---|---|
-| Do you want to use this API key?（来自 `~/.petra_env` 的 key） | **Yes**；默认的 No 会转去让你登录 |
+| Do you want to use this API key?（只在用 `ANTHROPIC_API_KEY` 时才问，网关 key 不会问） | **Yes**；默认的 No 会转去让你登录 |
 | Is this a project you trust? | **Yes, I trust this folder**；默认选项会退出 |
 | Bypass Permissions mode | **Yes, I accept**；默认选项会退出 |
 
@@ -180,6 +182,7 @@ decode 太慢，帮我优化；我的 sglang 在 /home/<you>/sglang"
 | `PETRA_REPO_URL`、`PETRA_REF` | bootstrap | `https://github.com/At1a8/Petra.git`，它的默认分支 |
 | `CLAUDE_VERSION`、`CLAUDE_BIN_DIR` | bootstrap | `latest`，`~/.local/bin` |
 | `CLAUDE_CONFIG_DIR` | bootstrap、Claude Code | 容器里的 root 用 `/home/<you>/.petra/claude`；已经设置时原样使用 |
+| `LLM_GATEWAY_KEY` | `~/.petra_env`、容器的 shell 配置 | 不设置；设置后 Claude Code 走 AMD LLM 网关，除非 `ANTHROPIC_BASE_URL` 指定了别的地址 |
 | `PETRA_FRAMEWORK_DIR`、`PETRA_FRAMEWORK_REPO` | bootstrap：`--framework-dir`、`--framework-repo` | 无（跳过该步）；sglang |
 | `PETRA_SKIP_BOOTSTRAP` | bootstrap | 不设置；设置后安装这个包时没有任何副作用（CI、构建镜像） |
 
