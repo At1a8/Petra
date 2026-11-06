@@ -199,6 +199,7 @@ claude --version    # the host's Claude Code
 
 | Step | In a new container |
 |---|---|
+| your home on the host | found through `PETRA_HOST_HOME`, which run_docker.sh passes: your Claude Code, its state and `~/.petra_env` are there. A container started without it gets nothing else set up, since its Claude Code would have no key and ask you to log in; the bootstrap fails and says how to start one that has it |
 | `claude` | a link `/usr/local/bin/claude` to your `~/.local/bin/claude` on the host; Claude Code is installed in the container only when the host has none |
 | Claude Code state | kept on the host in your `~/.petra/claude` (`CLAUDE_CONFIG_DIR`, apart from your own `~/.claude`) and shared by your containers: the first-start answers and a `/login` are given once |
 | git | trusts checkouts on host mounts, which belong to you, not root (`safe.directory '*'`) |
@@ -224,7 +225,11 @@ containers skip them. Three of the defaults would stop you:
 | Is this a project you trust? | **Yes, I trust this folder**; the default exits |
 | Bypass Permissions mode | **Yes, I accept**; the default exits |
 
-Without a key, pick a login method instead and log in once. Then ask:
+With a key, the first start asks for no login. If it asks you to select a login method, or shows
+`Paste code here if prompted >`, Claude Code has no key in this shell: enter nothing, press Ctrl-C three
+times in a row to leave, and read the end of step 3's output, which names what is missing. With a Claude
+subscription and no key, that login is the way in: pick *Claude account with subscription*, open the
+URL it prints in any browser, log in, and paste the code the page shows at that prompt. Then ask:
 
 ```
 use /workspace/Petra/petra.js with mode=scan, petra_dir=/workspace/Petra

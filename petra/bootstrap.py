@@ -10,6 +10,8 @@ Nothing is deleted, overwritten or re-cloned: a step that could only proceed by 
 state warns and leaves it alone.
 
   checkout      clone Petra to $PETRA_HOME, unless run inside a checkout or one is already there
+  host-home     (root in a container) find your home on the host; without it nothing else is set up,
+                since this container would have neither your Claude Code nor your keys
   claude-in     (container) link your Claude Code on the host onto PATH instead of installing another
   claude        install the Claude Code CLI if it is still missing; update one older than petra.js needs
   path          put the CLI's directory on PATH for new shells (one marked block in ~/.bashrc)
@@ -222,7 +224,7 @@ def host_home_missing(s: dict) -> str:
         return ""
     if s.get("host_home"):
         return "PETRA_HOST_HOME=%s is not mounted in this container" % s["host_home"]
-    return "no PETRA_HOST_HOME naming your home on the host (scripts/run_docker.sh passes it)"
+    return "PETRA_HOST_HOME is not set (scripts/run_docker.sh passes it)"
 
 
 def keys_file(s: dict) -> str:
@@ -275,6 +277,19 @@ def ensure_checkout(s: dict) -> tuple[str, str]:
         return "created", home
     warn("checkout: git clone failed; check the network and your access to %s" % s["repo_url"])
     return "failed", "git clone"
+
+
+# --- your home on the host -------------------------------------------------------
+
+def ensure_host_home(s: dict) -> tuple[str, str]:
+    """Without your home on the host, the steps after this one would install a second Claude Code, with
+    no keys and no state, which then asks for a login: none of them runs."""
+    if owner_dirs(s):
+        home = os.path.dirname(keys_file(s))
+        log("host-home: kept %s (your Claude Code, its state and %s)" % (home, KEYS_FILE))
+        return "kept", home
+    warn("host-home: %s; nothing else is set up (see the next steps)" % host_home_missing(s))
+    return "failed", "no home on the host"
 
 
 # --- Claude Code -----------------------------------------------------------------
@@ -586,6 +601,19 @@ def next_steps(s: dict, statuses: dict, found: dict | None = None, path_env: str
                claude_only: bool = False) -> str:
     c_on, c_off = _styles(sys.stdout)
     hl = lambda t: "%s%s%s" % (c_on, t, c_off)  # noqa: E731
+    if statuses.get("host-home") == "failed":
+        name = os.environ.get("PETRA_CONTAINER") or "<name>"
+        return "\n".join([
+            "Next steps:",
+            "1) This container cannot reach your home on the host: %s." % host_home_missing(s),
+            "     Your Claude Code, its state and %s are there; without them Claude Code here has no key and" % KEYS_FILE,
+            "     asks you to log in. Leave the container. On the host, remove it (its /workspace goes with it)",
+            "     or pick another NAME, and start a new one with scripts/run_docker.sh, which passes your home",
+            "     (README step 2):",
+            "     " + hl("docker rm -f %s" % name),
+            "     " + hl("bash <(curl -fsSL https://raw.githubusercontent.com/At1a8/Petra/main/scripts/run_docker.sh)"),
+            "     A docker run of your own needs " + hl("-e PETRA_HOST_HOME=$HOME") + ", with your home mounted at the same path.",
+        ])
     path_env = os.environ.get("PATH", "") if path_env is None else path_env
     steps = []
     d = s["claude_bin_dir"]
@@ -660,6 +688,8 @@ def main(argv=None) -> int:
         check_environment(keys_path=keys)
         return 0
     steps = [] if a.claude_only else [("checkout", ensure_checkout)]
+    if container and is_root():
+        steps.append(("host-home", ensure_host_home))
     if container:
         steps.append(("claude-in", ensure_claude_link))
     steps += [("claude", ensure_claude_code), ("path", ensure_path)]
@@ -669,12 +699,16 @@ def main(argv=None) -> int:
         if container and is_root():
             steps += [("git", ensure_git_trust), ("shell", ensure_shell_env)]
         steps.append(("framework", ensure_framework))
-    results = [(name,) + step(s) for name, step in steps]
+    results = []
+    for name, step in steps:
+        results.append((name,) + step(s))
+        if name == "host-home" and results[-1][1] == "failed":
+            break
     statuses = {step: status for step, status, _ in results}
     state = {step: detail for step, _, detail in results}.get("claude-state")
     if state and statuses.get("claude-state") in ("added", "created", "kept"):
         os.environ.setdefault("CLAUDE_CONFIG_DIR", state)  # this run's checks see a login kept there
-    found = None if a.claude_only else check_environment(keys_path=keys)
+    found = None if a.claude_only or statuses.get("host-home") == "failed" else check_environment(keys_path=keys)
     print("\n[petra-bootstrap] %s\n\n%s" % (summary(results), next_steps(s, statuses, found, claude_only=a.claude_only)),
           flush=True)
     return 1 if "failed" in statuses.values() else 0

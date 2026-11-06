@@ -121,6 +121,7 @@ claude --version    # 宿主机上的 Claude Code
 
 | 步骤 | 在新容器里做什么 |
 |---|---|
+| 你宿主机上的 home | 通过 `PETRA_HOST_HOME` 找到（run_docker.sh 会传进来）：你的 Claude Code、它的状态和 `~/.petra_env` 都在那里。没有它就启动的容器什么都不会配置，因为那样的容器里 Claude Code 没有 key，会要求你登录；bootstrap 会报错，并说明怎样启动一个有它的容器 |
 | `claude` | 创建链接 `/usr/local/bin/claude`，指向你在宿主机上的 `~/.local/bin/claude`；只有宿主机上没有 Claude Code 时才在容器里安装 |
 | Claude Code 状态 | 保存在你宿主机上的 `~/.petra/claude`（`CLAUDE_CONFIG_DIR`，与你自己的 `~/.claude` 分开），你的各个容器共用：首次启动时的回答和 `/login` 登录只需做一次 |
 | git | 信任宿主机挂载目录里的 checkout，它们属于你而不是 root（`safe.directory '*'`） |
@@ -144,7 +145,7 @@ cd /workspace/Petra && IS_SANDBOX=1 claude --dangerously-skip-permissions
 | Is this a project you trust? | **Yes, I trust this folder**；默认选项会退出 |
 | Bypass Permissions mode | **Yes, I accept**；默认选项会退出 |
 
-没有 key 时，改为选择一种登录方式并登录一次。然后输入：
+有 key 时，首次启动不会要求登录。如果它让你选择登录方式（select a login method），或者显示 `Paste code here if prompted >`，说明这个 shell 里的 Claude Code 没有拿到 key：什么都不要输入，连按三次 Ctrl-C 退出，然后看第 3 步输出的最后几行，那里写明了缺什么。用 Claude 订阅、没有 key 时，这个登录才是入口：选择 *Claude account with subscription*，在任意浏览器里打开它打印出的 URL，登录后把页面上显示的授权码粘贴到这个提示后面。然后输入：
 
 ```
 use /workspace/Petra/petra.js with mode=scan, petra_dir=/workspace/Petra

@@ -106,9 +106,14 @@ class HostHomeTest(unittest.TestCase):
             self.assertEqual(bs.keys_file(s), str(home / ".petra_env"))
             self.assertEqual(bs.claude_state_dir(s), str(home / ".petra" / "claude"))
             self.assertEqual(bs.host_home_missing(s), "")
+            with Quiet():
+                self.assertEqual(bs.ensure_host_home(s), ("kept", str(home)))
             gone = S("/", HOME="/root", PETRA_HOME=str(co), PETRA_HOST_HOME=str(Path(d) / "elsewhere"))
             self.assertEqual((bs.owner_dirs(gone), bs.keys_file(gone)), ([], ""))
             self.assertIn("not mounted", bs.host_home_missing(gone))
+            with Quiet() as q:
+                self.assertEqual(bs.ensure_host_home(gone)[0], "failed")
+            self.assertIn("nothing else is set up", q.err.getvalue())
 
     def test_a_checkout_of_root_names_no_home(self):
         """Petra cloned into /workspace belongs to root, which says nothing about your home."""
@@ -117,7 +122,7 @@ class HostHomeTest(unittest.TestCase):
             of_root = os.stat_result((0o40755, 0, 0, 1, 0, 0, 0, 0, 0, 0))
             with mock.patch.object(bs.os, "stat", return_value=of_root):
                 self.assertEqual(bs.owner_dirs(s), [])
-                self.assertIn("no PETRA_HOST_HOME", bs.host_home_missing(s))
+                self.assertIn("PETRA_HOST_HOME is not set", bs.host_home_missing(s))
 
 
 class CheckoutTest(unittest.TestCase):
@@ -561,8 +566,8 @@ class ReportTest(unittest.TestCase):
 
 
 class MainTest(unittest.TestCase):
-    STEPS = ["ensure_checkout", "ensure_claude_link", "ensure_claude_code", "ensure_path", "ensure_claude_state",
-             "ensure_git_trust", "ensure_shell_env", "ensure_framework"]
+    STEPS = ["ensure_checkout", "ensure_host_home", "ensure_claude_link", "ensure_claude_code", "ensure_path",
+             "ensure_claude_state", "ensure_git_trust", "ensure_shell_env", "ensure_framework"]
 
     def run_main(self, argv, container=False, root=False, failing=None):
         env = {k: v for k, v in os.environ.items() if not k.startswith("PETRA_")}
@@ -593,13 +598,29 @@ class MainTest(unittest.TestCase):
         rc, m = self.run_main([])
         self.assertEqual(self.called(m), ["ensure_checkout", "ensure_claude_code", "ensure_path", "ensure_framework"])
         rc, m = self.run_main(["--claude-only"], container=True, root=True)
-        self.assertEqual(self.called(m), ["ensure_claude_link", "ensure_claude_code", "ensure_path", "ensure_claude_state"])
+        self.assertEqual(self.called(m), ["ensure_host_home", "ensure_claude_link", "ensure_claude_code", "ensure_path",
+                                          "ensure_claude_state"])
         self.assertFalse(m["check_environment"].called)
         rc, m = self.run_main(["--check"])
         self.assertTrue(m["check_environment"].called and not self.called(m))
 
     def test_a_failed_step_sets_the_exit_code(self):
         self.assertEqual(self.run_main([], failing="ensure_framework")[0], 1)
+
+    def test_no_home_on_the_host_sets_up_nothing(self):
+        """Otherwise the container gets a Claude Code with no keys, which asks for a login."""
+        rc, m = self.run_main([], container=True, root=True, failing="ensure_host_home")
+        self.assertEqual((rc, self.called(m)), (1, ["ensure_checkout", "ensure_host_home"]))
+        self.assertFalse(m["check_environment"].called)
+
+    def test_next_steps_without_a_home_on_the_host(self):
+        s = bs.settings({"PWD": "/", "HOME": "/root"})
+        with mock.patch.dict(os.environ, {"PETRA_CONTAINER": "box"}), mock.patch.object(bs, "owner_dirs", return_value=[]):
+            out = bs.next_steps(s, {"checkout": "kept", "host-home": "failed"}, None, path_env="/usr/bin")
+        self.assertIn("docker rm -f box", out)
+        self.assertIn("-e PETRA_HOST_HOME=$HOME", out)
+        self.assertNotIn("ANTHROPIC_API_KEY", out)
+        self.assertNotIn("petra.js", out)
 
 
 if __name__ == "__main__":
