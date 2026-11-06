@@ -75,6 +75,7 @@ Petra 像 GEAK 一样，以 root 身份运行在 ROCm 容器里：Claude Code、
 - 你能使用的 Docker（用户在 `docker` 组里，或者有 sudo），以及 git、curl、python3 和 tmux。
 - 能访问 claude.ai、github.com 和 Docker Hub；每个 sglang 镜像约需 45 GB 磁盘。
 - 一个 AMD LLM 网关 key（`LLM_GATEWAY_KEY`）、Anthropic API key 或其他网关；都没有时，用 Claude 订阅账号登录。
+- 一个只读的 GitHub token（`GITHUB_TOKEN`），强烈建议准备：scan 和 issue 运行要通过 GitHub API 读取数据。
 - 模型权重放在会挂载进容器的目录里（`/data`、`/mnt`、`/home` 等）：Petra 从不下载权重。
 
 ### 1. 安装 Claude Code 并保存 key（宿主机）
@@ -83,13 +84,15 @@ Petra 像 GEAK 一样，以 root 身份运行在 ROCm 容器里：Claude Code、
 command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash
 ~/.local/bin/claude --version    # 需要 2.1.177 或更高版本：从这个版本起才有 petra.js 运行所需的 Workflow 工具
 [ -e ~/.petra_env ] || (umask 077 && echo 'export LLM_GATEWAY_KEY=<your AMD LLM gateway key>' > ~/.petra_env)
+(umask 077 && grep -qs GITHUB_TOKEN ~/.petra_env || echo 'export GITHUB_TOKEN=<your GitHub token>' >> ~/.petra_env)
 ```
 
 原生安装器把 Claude Code 装在 `~/.local/bin`，它在你的 home 里，而容器会挂载这个目录，容器就是这样调用它的。宿主机负责更新它，容器从不更新它。
 
-运行最后一行之前，先把 `<your AMD LLM gateway key>` 换成你自己的 key：这条命令只在文件不存在时才会写入，所以以后要换 key，直接编辑 `~/.petra_env`。
+运行最后两行之前，先把 `<your AMD LLM gateway key>` 和 `<your GitHub token>` 换成你自己的值：每一行都只在 `~/.petra_env` 里还没有这个 key 时才写入，所以以后要换 key，直接编辑这个文件。`~/.petra_env` 把 key 保存在宿主机上，只有你能读取，每个容器都会加载它。
 
-`~/.petra_env` 把 key 保存在宿主机上，只有你能读取，每个容器都会加载它。写的是 AMD LLM 网关 key 时，第 3 步会让 Claude Code 走这个网关（`https://llm-api.amd.com/Unified`，key 放在 `Ocp-Apim-Subscription-Key` 请求头里），网关按 Claude 模型的常用名字提供服务。不在 AMD 内部时，改写成 `export ANTHROPIC_API_KEY=sk-ant-...`；其他网关的配置也写在这个文件里（`ANTHROPIC_BASE_URL` 加上 `ANTHROPIC_AUTH_TOKEN` 或 `ANTHROPIC_CUSTOM_HEADERS`），`GITHUB_TOKEN` 也是；没有它，scan 和 issue 运行每分钟只能做 10 次 GitHub 搜索。如果用 Claude 订阅而不是 key，就不写 key，在首次启动时登录（第 4 步）。
+- **LLM key（必填）。** 写的是 AMD LLM 网关 key 时，第 3 步会让 Claude Code 走这个网关（`https://llm-api.amd.com/Unified`，key 放在 `Ocp-Apim-Subscription-Key` 请求头里），网关按 Claude 模型的常用名字提供服务。不在 AMD 内部时，改写成 `export ANTHROPIC_API_KEY=sk-ant-...`，或者其他网关（`ANTHROPIC_BASE_URL` 加上 `ANTHROPIC_AUTH_TOKEN` 或 `ANTHROPIC_CUSTOM_HEADERS`）。用 Claude 订阅时不写 key，在首次启动时登录（第 4 步）。
+- **GitHub token（强烈建议）。** scan 和 issue 运行要通过 GitHub API 读取 issue、PR 和 CI 跟踪记录。没有 token 时，GitHub 对每个 IP 地址每小时只允许 60 次请求、每分钟 10 次搜索，同一出口 IP 下的所有人共用这个额度，扫描会非常慢，还可能中途停下；有 token 时每小时 5000 次。只读权限就够了，Petra 从不 push 也不发帖：在 github.com 上进入 Settings → Developer settings → Personal access tokens → Fine-grained tokens，权限选 *Public repositories (read-only)*（不勾选任何权限的 classic token 也可以）。
 
 ### 2. 启动容器（宿主机）
 
@@ -122,7 +125,7 @@ claude --version    # 宿主机上的 Claude Code
 | git | 信任挂载进来的 checkout，它们属于你而不是 root（`safe.directory '*'`） |
 | shell | 在 root 的 `~/.bashrc` 里设置 `PYTHONDONTWRITEBYTECODE=1`（你的 checkout 里不会出现 root 所有的 `__pycache__`）、`DISABLE_AUTOUPDATER=1`（由宿主机更新 Claude Code），并加载 `/home/<you>/.petra_env`；设置了 `LLM_GATEWAY_KEY` 且没有 `ANTHROPIC_BASE_URL` 时，让 Claude Code 走 AMD LLM 网关 |
 | 框架（`--framework-dir`） | 已有的 checkout 原样使用（浅克隆只会提示，不会加深）；缺失时带完整历史克隆（`--filter=blob:none`），并把属主交给你 |
-| 检查 | GPU、sglang、API 访问、`GITHUB_TOKEN`（只检测） |
+| 检查 | GPU、sglang、API 访问、`GITHUB_TOKEN`，`~/.petra_env` 里设置的也算（只检测） |
 
 `python3 -B` 让这第一次运行不会往 checkout 里写 root 所有的 `__pycache__`。这条命令从不写入 key。
 
@@ -236,7 +239,7 @@ python3 scripts/run_lock.py release --force   # 那个运行已经中断时，�
 
 ## 脚本
 
-全部是只用标准库的 Python；访问 GitHub 的脚本读取 `GITHUB_TOKEN` 或 `GH_TOKEN`（没有 token 时搜索 API 每分钟只允许 10 次请求）。
+全部是只用标准库的 Python；访问 GitHub 的脚本读取 `GITHUB_TOKEN` 或 `GH_TOKEN`（见第 1 步；没有 token 时，GitHub 对每个 IP 每小时只允许 60 次请求、每分钟 10 次搜索）。
 
 | 脚本 | 任务来源 |
 |---|---|

@@ -429,6 +429,21 @@ class ReportTest(unittest.TestCase):
             (Path(d) / ".claude" / ".credentials.json").write_text("{}")
             self.assertTrue(bs.api_configured({}, d))
 
+    def test_keys_in_petra_env_count_before_the_shell_loads_them(self):
+        with tempfile.TemporaryDirectory() as d:
+            keys = Path(d) / ".petra_env"
+            keys.write_text("# keys\nexport LLM_GATEWAY_KEY=0123abcd\nexport GITHUB_TOKEN='<your GitHub token>'\n")
+            self.assertEqual(bs.keys_defined(str(keys)), {"LLM_GATEWAY_KEY"})
+            with mock.patch.object(bs, "_has", return_value=True), mock.patch.object(bs, "in_container", return_value=True), Quiet() as q:
+                found = bs.check_environment({"HOME": d}, keys_path=str(keys))
+            self.assertTrue(found["api"])
+            self.assertFalse(found["github_token"], "the README's placeholder is not a token")
+            self.assertIn("README step 1", q.err.getvalue())
+            keys.write_text("export LLM_GATEWAY_KEY=0123abcd\nexport GITHUB_TOKEN=github_pat_x\n")
+            with mock.patch.object(bs, "_has", return_value=True), mock.patch.object(bs, "in_container", return_value=True), Quiet():
+                self.assertTrue(bs.check_environment({"HOME": d}, keys_path=str(keys))["github_token"])
+                self.assertFalse(bs.check_environment({"HOME": d})["github_token"], "without the file nothing is assumed")
+
     def test_next_steps_in_a_new_container(self):
         with tempfile.TemporaryDirectory() as d:
             host = Path(d) / "u"

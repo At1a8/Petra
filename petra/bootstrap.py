@@ -505,8 +505,23 @@ def _importable(module: str) -> bool:
         return False
 
 
-def check_environment(env=None) -> dict:
-    env = os.environ if env is None else env
+def keys_defined(path: str) -> set:
+    """Names a keys file sets to a real value; a value still in <angle brackets> is the README's
+    placeholder and does not count. Values are never read into the report."""
+    names = set()
+    for line in _read(path).splitlines() if path else ():
+        m = re.match(r"\s*(?:export\s+)?([A-Za-z_]\w*)=(.*)$", line)
+        value = m.group(2).strip().strip("'\"") if m else ""
+        if value and not value.startswith("<"):
+            names.add(m.group(1))
+    return names
+
+
+def check_environment(env=None, keys_path: str = "") -> dict:
+    """keys_path: ~/.petra_env, which new shells load; what it sets counts before this shell has it."""
+    env = dict(os.environ if env is None else env)
+    for name in keys_defined(keys_path):
+        env.setdefault(name, "set in %s" % keys_path)
     checks = [("git", _has("git"), "git is required: Petra works in a worktree of the framework checkout")]
     if not in_container():
         checks.append(("docker", _has("docker"), "docker not found: scripts/run_docker.sh starts Petra's container"))
@@ -515,7 +530,9 @@ def check_environment(env=None) -> dict:
         ("sglang", _importable("sglang"), "sglang is not importable here: run Petra where the framework is installed (the container)"),
         ("node", _has("node"), "Node.js not found: needed only for tests/dry_run.mjs and for running petra.js outside Claude Code"),
         ("api", api_configured(env, _expand("~", env)), "no Claude Code API access in this shell (see the next steps)"),
-        ("github_token", bool(env.get("GITHUB_TOKEN") or env.get("GH_TOKEN")), "no GITHUB_TOKEN / GH_TOKEN: scan scripts fall back to 10 search requests per minute"),
+        ("github_token", bool(env.get("GITHUB_TOKEN") or env.get("GH_TOKEN")),
+         "no GITHUB_TOKEN: GitHub then allows 60 requests an hour and 10 searches a minute per IP, so scans "
+         "crawl and can stop partway; add a read-only token to ~/.petra_env (README step 1)"),
     ]
     found = {}
     log("checks (detect only):")
@@ -604,10 +621,11 @@ def main(argv=None) -> int:
         log("PETRA_SKIP_BOOTSTRAP set; skipping")
         return 0
     s = settings(opts={"framework_dir": a.framework_dir, "framework_repo": a.framework_repo})
-    if a.check:
-        check_environment()
-        return 0
     container = in_container()
+    keys = keys_file(s) if container else ""
+    if a.check:
+        check_environment(keys_path=keys)
+        return 0
     steps = [] if a.claude_only else [("checkout", ensure_checkout)]
     if container:
         steps.append(("claude-in", ensure_claude_link))
@@ -623,7 +641,7 @@ def main(argv=None) -> int:
     state = {step: detail for step, _, detail in results}.get("claude-state")
     if state and statuses.get("claude-state") in ("added", "created", "kept"):
         os.environ.setdefault("CLAUDE_CONFIG_DIR", state)  # this run's checks see a login kept there
-    found = None if a.claude_only else check_environment()
+    found = None if a.claude_only else check_environment(keys_path=keys)
     print("\n[petra-bootstrap] %s\n\n%s" % (summary(results), next_steps(s, statuses, found, claude_only=a.claude_only)),
           flush=True)
     return 1 if "failed" in statuses.values() else 0

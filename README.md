@@ -113,6 +113,8 @@ overwritten or re-cloned.
 - Network access to claude.ai, github.com and Docker Hub, and about 45 GB of disk per sglang image.
 - An AMD LLM gateway key (`LLM_GATEWAY_KEY`), an Anthropic API key or another gateway; without any, a
   Claude subscription to log in with.
+- A read-only GitHub token (`GITHUB_TOKEN`), strongly recommended: scans and issue runs read GitHub's
+  API.
 - Model weights in a directory the container mounts (`/data`, `/mnt`, `/home`, ...): Petra never
   downloads weights.
 
@@ -122,21 +124,29 @@ overwritten or re-cloned.
 command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash
 ~/.local/bin/claude --version    # 2.1.177 or later: the first with the Workflow tool petra.js runs in
 [ -e ~/.petra_env ] || (umask 077 && echo 'export LLM_GATEWAY_KEY=<your AMD LLM gateway key>' > ~/.petra_env)
+(umask 077 && grep -qs GITHUB_TOKEN ~/.petra_env || echo 'export GITHUB_TOKEN=<your GitHub token>' >> ~/.petra_env)
 ```
 
 The native installer puts Claude Code in `~/.local/bin`, inside your home, which the container mounts;
 that is how the container calls it. The host keeps it up to date; the container never updates it.
 
-Put your own key in place of `<your AMD LLM gateway key>` before you run the last line: it writes the
-file only when there is none, so a key is changed later by editing `~/.petra_env`.
+Put your own values in place of `<your AMD LLM gateway key>` and `<your GitHub token>` before you run
+the last two lines: each writes its key only when `~/.petra_env` does not have it yet, so a key is
+changed later by editing the file. `~/.petra_env` keeps the keys on the host, readable only by you;
+every container loads it.
 
-`~/.petra_env` keeps the keys on the host, readable only by you; every container loads it. With the
-AMD LLM gateway key, step 3 points Claude Code at the gateway (`https://llm-api.amd.com/Unified`, the
-key in its `Ocp-Apim-Subscription-Key` header), which serves the Claude models under their usual
-names. Outside AMD, write `export ANTHROPIC_API_KEY=sk-ant-...` instead; another gateway goes in the
-same file (`ANTHROPIC_BASE_URL` with `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_CUSTOM_HEADERS`), and so does
-`GITHUB_TOKEN`, without which scan and issue runs get only 10 GitHub searches a minute.
-With a Claude subscription instead of a key, leave the key out and log in at the first start (step 4).
+- **LLM key (required).** With the AMD LLM gateway key, step 3 points Claude Code at the gateway
+  (`https://llm-api.amd.com/Unified`, the key in its `Ocp-Apim-Subscription-Key` header), which serves
+  the Claude models under their usual names. Outside AMD, write `export ANTHROPIC_API_KEY=sk-ant-...`
+  instead, or another gateway (`ANTHROPIC_BASE_URL` with `ANTHROPIC_AUTH_TOKEN` or
+  `ANTHROPIC_CUSTOM_HEADERS`). With a Claude subscription, leave the key out and log in at the first
+  start (step 4).
+- **GitHub token (strongly recommended).** Scans and issue runs read issues, pull requests and CI
+  trackers through GitHub's API. Without a token GitHub allows 60 requests an hour and 10 searches a
+  minute per IP address, shared with everyone behind the same address, so a scan crawls and can stop
+  partway; with one, 5000 requests an hour. Read-only is enough, since Petra never pushes or posts: on
+  github.com, Settings → Developer settings → Personal access tokens → Fine-grained tokens, with
+  *Public repositories (read-only)* access (a classic token with no scopes also works).
 
 ### 2. Start the container (host)
 
@@ -184,7 +194,7 @@ claude --version    # the host's Claude Code
 | git | trusts the mounted checkouts, which belong to you, not root (`safe.directory '*'`) |
 | shell | root's `~/.bashrc` gets `PYTHONDONTWRITEBYTECODE=1` (no root-owned `__pycache__` in your checkouts), `DISABLE_AUTOUPDATER=1` (the host updates Claude Code) and loads `/home/<you>/.petra_env`; with `LLM_GATEWAY_KEY` and no `ANTHROPIC_BASE_URL`, it points Claude Code at the AMD LLM gateway |
 | framework (`--framework-dir`) | an existing checkout is used as it is (a shallow one is reported, not deepened); a missing one is cloned with its whole history (`--filter=blob:none`) and given to you |
-| checks | GPUs, sglang, API access, `GITHUB_TOKEN` (detect only) |
+| checks | GPUs, sglang, API access, `GITHUB_TOKEN`, counting what `~/.petra_env` sets (detect only) |
 
 `python3 -B` keeps this first run from writing root-owned `__pycache__` into the checkout. The command
 never writes keys.
@@ -335,8 +345,8 @@ lists for it from the task worktree, so they match the code it changes, with ROC
 
 ## Scripts
 
-Standard-library Python; the GitHub ones read `GITHUB_TOKEN` or `GH_TOKEN` (without a token the
-search API allows 10 requests a minute).
+Standard-library Python; the GitHub ones read `GITHUB_TOKEN` or `GH_TOKEN` (step 1; without a token
+GitHub allows 60 requests an hour and 10 searches a minute per IP address).
 
 | Script | Source of tasks |
 |---|---|
