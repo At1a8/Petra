@@ -65,7 +65,7 @@ kernel 级的工作——调优 Petra 为某个特性写的 kernel，或者 kern
 
 ## 安装
 
-Petra 像 GEAK 一样，以 root 身份运行在 ROCm 容器里：Claude Code、Petra、git 以及框架的服务和测试都在容器里运行，紧挨着 GPU 和框架的 Python 环境。每个任务用一个自己的容器，任务用到的一切都在这个容器里：`/workspace` 里的 Petra checkout 和各个运行目录，以及镜像自带的 sglang `/sgl-workspace/sglang`，任务在它上面开自己的分支修改。容器之间不共享这些，所以互不干扰；它们随所在的容器保留，容器删除时一起删除。所有容器都要用的东西留在宿主机上你的 home 里，并以相同路径挂载进容器：只装一次的 Claude Code、它的状态和你的 key。
+Petra 像 GEAK 一样，以 root 身份运行在 ROCm 容器里：Claude Code、Petra、git 以及框架的服务和测试都在容器里运行，紧挨着 GPU 和框架的 Python 环境。每个任务用一个自己的容器，任务用到的一切都在这个容器里：`/workspace` 里的 Petra checkout 和它的运行目录，以及镜像自带的 sglang `/sgl-workspace/sglang`，任务在它上面开自己的分支修改。容器之间不共享这些，所以互不干扰；它们随所在的容器保留，容器删除时一起删除。所有容器都要用的东西留在宿主机上你的 home 里，并以相同路径挂载进容器：只装一次的 Claude Code、它的状态和你的 key。
 
 每一步都可以重复执行：先检查，保留已有的，只补缺的；再次运行 run_docker.sh 会回到原来的容器。命令里的 `检查 || 动作` 表示只有检查不通过时才执行动作：在新机器上每个动作都会执行，再运行一次则全部跳过。除了第 3 步丢弃镜像构建对 `/sgl-workspace/sglang` 打包文件的改动，不会删除、覆盖或重新克隆任何东西。
 
@@ -171,13 +171,24 @@ decode 太慢，帮我优化"
 
 ### 5. 运行结束后（容器内）
 
-过了 Setup 的运行会把报告留在 `/workspace/Petra/exp/` 下它自己的运行目录里（PR 准备好时是 `validation_report.md`，其他结局是 `report.md`；运行结果中的 `report_path` 给出路径）。任务的分支 `petra/<slug>` 在 `/sgl-workspace/sglang` 里；准备好 PR 的运行还会把它的 commit 导成 patch，放在运行目录的 `patches/` 下。Petra 从不 push：报告里列出了 PR 描述和确切的 `git -C /sgl-workspace/sglang push ...` 命令。可以在容器里用有 push 权限的凭据执行它；也可以把运行目录带到你宿主机上的 home，在宿主机上你自己的 sglang checkout 里 push，你的 git 凭据在那里（`<run>` 是运行目录的名字）：
+每次过了 Setup 的运行，都在 `/workspace/Petra/exp`（git 会忽略它）里有自己的目录，名字是 `<mode>_<slug>_<time>`：模式、任务的简短名字和 UTC 开始时间，例如 `issue_41299-glm-dcp_20261106-071502Z` 或 `scan_20261106-064327Z`。`exp/index.md` 列出这个容器里的每次运行和它的结局。一个运行目录里有：
+
+| 文件 | 内容 |
+|---|---|
+| `run.json` | 任务定义、intake 的假设，以及所在的容器（任务的分支在那个容器里） |
+| `validation_report.md`、`run_report.md` | 报告：PR 准备好时是前者，其他结局是后者（运行结果中的 `report_path` 给出路径） |
+| `experiment_ledger.md` | 环境、基线和每一次测量 |
+| `logs/` | 每次启动服务或 benchmark 一个日志，`<tag>_<time>.log` |
+| `pr_body.md`、`patches/` | PR 描述，以及导成 patch 的分支 commit |
+| `task_queue.md` | scan 排好序的任务，每项附可以启动它的任务定义；旁边是各个来源找到的内容（`<source>.json`） |
+
+Petra 从不 push。任务的分支 `petra/<slug>` 在 `/sgl-workspace/sglang` 里，报告给出确切的 `git -C /sgl-workspace/sglang push ...`：可以在容器里用有 push 权限的凭据执行它。运行目录随容器保留和删除；要保留某次运行，或者要在宿主机上 push（你的 git 凭据在那里），就把它复制到你宿主机上的 home（`<run>` 是运行目录的名字）：
 
 ```bash
 cp -r /workspace/Petra/exp/<run> "$PETRA_HOST_HOME"/ && /workspace/Petra/scripts/restore_owner.sh "$PETRA_HOST_HOME"/<run>
 ```
 
-复制出来的文件属于你而不是 root。在宿主机上你的 sglang checkout 里，先用报告给出的基础 commit 执行 `git checkout -b petra/<slug> <base>`，再执行 `git am ~/<run>/patches/*.patch`，就能还原这些 commit。
+复制出来的文件属于你而不是 root。在宿主机上你的 sglang checkout 里，先用报告给出的基础 commit 执行 `git checkout -b petra/<slug> <base>`，再执行 `git am ~/<run>/patches/*.patch`，然后 push。
 
 ### 重复执行与选项
 
@@ -220,7 +231,7 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `framework`、`platform`、`gpu_ids` | 目标与环境（`sglang`；`gpu_ids` 为空时由 Setup 挑选空闲的 GPU，之后每个角色都通过 `HIP_VISIBLE_DEVICES` 使用这组 GPU） |
 | `workload` | 每次测量都使用的基准负载，例如 `{"isl":8192,"osl":1024,"conc":64}`；`perf` 必填，在 Setup 时固定 |
 | `container` | 只在 Petra 运行在宿主机上时使用：框架所在的容器，通过 `docker exec` 访问 |
-| `exp_root` | 运行目录放在哪里（默认 `<petra_dir>/exp`） |
+| `exp_root` | 运行目录放在哪里（默认 `<petra_dir>/exp`，git 会忽略它） |
 | `kernel_backend` | `none`（默认）\| `geak` \| `command`：kernel hand-off 交给谁 |
 | `kernel_backend_dir` | `geak` 后端：提供 `kernel_workflow/kernel_lane.js` 的 GEAK checkout |
 | `kernel_backend_command` | `command` 后端：带 `{task_dir}`、`{out_dir}`、`{gpu_ids}` 占位符的 shell 命令 |
@@ -237,7 +248,7 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 
 人工检查点：Intake 的提问（`needs_input`）；任何 `stop_after`；L3 任务和 architect 标记的设计会停在 Design（`awaiting_design_review`）；被 reviewer 标为 `blocked` 的审阅会在 PR 之前停下；PR engineer 只返回确切的 `git push` 而不执行；issue 回复是运行目录里的草稿。只要建好了运行目录，无论结局如何，运行都会以一份报告结束；停在 Intake（提问或拒绝），或在 Setup 建目录之前就结束的运行（`busy`），只返回运行结果。
 
-**一台机器一个任务。** 运行在创建任何东西之前先占住这台机器：锁放在 `/dev/shm`，所有用 `--ipc=host` 启动的容器都和宿主机共用它，其他机器看不到；运行在写完报告后释放。另一个任务占着机器时，新的运行会立即以 `busy` 结束，并说明是谁占着。如果持有锁的运行已经结束，或者在两倍于最长 agent 调用的时间里（默认 12 小时）没往运行目录写过任何东西，下一个运行会直接接管；意外中断的运行留下的锁可以立即释放：
+**一台机器一个任务。** 运行在创建任何东西之前先占住这台机器：锁放在 `/dev/shm`，所有用 `--ipc=host` 启动的容器都和宿主机共用它，其他机器看不到；运行在写完报告后释放。另一个任务占着机器时，新的运行会立即以 `busy` 结束，并说明是谁占着。如果持有锁的运行已经结束，或者在两倍于最长 agent 调用的时间里（默认 12 小时）没往运行目录写过任何东西，下一个运行会直接接管。另一个容器里的运行不会因为没动静而被接管，因为这里看不到它的运行目录；确认那次运行已经不在之后，用第二条命令释放机器，和释放意外中断的运行留下的锁一样：
 
 ```bash
 python3 scripts/run_lock.py status            # 谁占着这台机器
@@ -264,7 +275,7 @@ python3 scripts/run_lock.py release --force   # 那个运行已经中断时，�
 
 ```bash
 GEAK_HOME=/path/to/GEAK node tests/dry_run.mjs   # 在 GEAK 运行时上走遍 petra.js 的每条控制路径，不需要 GPU
-python3 -m unittest discover -s tests             # 脚本的解析与规则、bootstrap、两份 README 的一致性；离线运行
+python3 -m unittest discover -s tests             # 脚本的解析与规则、bootstrap、Claude Code 对 workflow 的规则、两份 README 的一致性；离线运行
 ```
 
 ## 目录结构
@@ -290,7 +301,7 @@ Petra/
 │                            # restore_owner.sh
 ├── petra/bootstrap.py       # 第 3 步的配置脚本，在容器内运行；可以重复执行
 ├── setup.py, pyproject.toml # 打包；pip 构建 wheel 时 setup.py 会运行 bootstrap
-├── tests/                   # petra.js 的 dry run，脚本、bootstrap 和 README 的单元测试
+├── tests/                   # petra.js 的 dry run，脚本、bootstrap、Claude Code workflow 规则和 README 的单元测试
 ├── README.md, README.zh-CN.md
 └── docs/design.md
 ```

@@ -127,8 +127,10 @@ checkout, `/sgl-workspace/sglang`, so what runs is what is checked out there: se
 once per container (discarding only the image build's packaging changes), and each task works in it
 on its own branch from the current main, which Setup fetches first; a dirty checkout stops Setup. A
 baseline at the base commit, and a scan of the current main, read worktrees of the same repository
-under the run directory; the PR engineer writes the task's commits there as patches, so the change can
-leave the container.
+under the run directory. Run directories live in the container's `<petra_dir>/exp`, with an `index.md`
+that lists every run; the PR engineer writes the task's commits there as patches, so the change can
+leave the container. A run in another container is never taken over for silence, since its run
+directory is not visible: `run_lock.py release --force` frees a lock whose run is gone.
 
 - Gates G0–G5 (`validation_doctrine.md`), plus mode gates (`issue_repro`, `failing_test`) and the
   composability gates of every dimension a task touches.

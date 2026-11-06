@@ -96,11 +96,11 @@ the roles:
 
 Petra runs inside a ROCm container, as root, the way GEAK does: Claude Code, Petra, git and the
 framework's servers and tests all run there, next to the GPUs and the framework's Python environment.
-Each task gets its own container, and everything the task works on lives in that container: Petra's
-checkout and the run directories in `/workspace`, and the image's own sglang in `/sgl-workspace/sglang`,
+Each task gets its own container, and everything it works on lives in that container: Petra's
+checkout and its run directories in `/workspace`, and the image's own sglang in `/sgl-workspace/sglang`,
 which the task changes on its own branch. Containers do not share them, so they stay out of each
-other's way, and they last as long as their container. What every container needs stays in your home on the host, mounted at the same path: Claude
-Code, installed once, its state and your keys.
+other's way, and they last as long as their container. What every container needs stays in your home
+on the host, mounted at the same path: Claude Code, installed once, its state and your keys.
 
 Every step can be run again: it checks first, keeps what is already there and adds only what is
 missing, and run_docker.sh, run again, takes you back into the container. In the commands,
@@ -265,20 +265,31 @@ Claude Code runs `petra.js` again with the same arguments plus `answers={"worklo
 
 ### 5. After a run (in the container)
 
-A run that got past Setup leaves its report in its run directory under `/workspace/Petra/exp/`
-(`validation_report.md` when a PR is ready, `report.md` for any other outcome; the result names it as
-`report_path`). The task's branch, `petra/<slug>`, is in `/sgl-workspace/sglang`, and a run with a PR
-also leaves its commits as patches in the run directory's `patches/`. Petra never pushes: the report
-lists the PR body and the exact `git -C /sgl-workspace/sglang push ...`. Run it in the container with
-credentials that can push, or take the run directory to your home on the host and push from your own
-sglang checkout there, where your git credentials are (`<run>` is the run directory's name):
+Every run that got past Setup has its directory in `/workspace/Petra/exp` (ignored by git), named
+`<mode>_<slug>_<time>`: the mode, a short name of the task and its start in UTC, e.g.
+`issue_41299-glm-dcp_20261106-071502Z` or `scan_20261106-064327Z`. `exp/index.md` lists every run of
+the container with its status. A run directory holds:
+
+| File | What it holds |
+|---|---|
+| `run.json` | the task definition, the intake's assumptions and the container, which holds the task's branch |
+| `validation_report.md`, `run_report.md` | the report: the first when a PR is ready, the second for any other outcome (the result names it as `report_path`) |
+| `experiment_ledger.md` | the environment, the baseline and every measurement |
+| `logs/` | one log per server or benchmark launch, `<tag>_<time>.log` |
+| `pr_body.md`, `patches/` | the PR description and the branch's commits as patches |
+| `task_queue.md` | a scan's ranked tasks, each with the definition that starts it, next to what each source found (`<source>.json`) |
+
+Petra never pushes. The task's branch, `petra/<slug>`, is in `/sgl-workspace/sglang`, and the report
+gives the exact `git -C /sgl-workspace/sglang push ...`: run it here with credentials that can push.
+Run directories go with the container; to keep one, or to push from the host, where your git
+credentials are, copy it to your home there (`<run>` is the run directory's name):
 
 ```bash
 cp -r /workspace/Petra/exp/<run> "$PETRA_HOST_HOME"/ && /workspace/Petra/scripts/restore_owner.sh "$PETRA_HOST_HOME"/<run>
 ```
 
 The copy is yours, not root's. On the host, in your sglang checkout, `git checkout -b petra/<slug> <base>`
-with the base commit the report names, then `git am ~/<run>/patches/*.patch`, recreates the commits.
+with the base commit the report names, then `git am ~/<run>/patches/*.patch`, and push from there.
 
 ### Re-running and options
 
@@ -330,7 +341,7 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `framework`, `platform`, `gpu_ids` | target and environment (`sglang`; empty `gpu_ids` lets Setup pick idle GPUs, which every later role then uses through `HIP_VISIBLE_DEVICES`) |
 | `workload` | the benchmark every measurement uses, e.g. `{"isl":8192,"osl":1024,"conc":64}`; required for `perf`, fixed at Setup |
 | `container` | only when Petra runs on the host: the framework's container, reached with `docker exec` |
-| `exp_root` | where run directories go (default `<petra_dir>/exp`) |
+| `exp_root` | where run directories go (default `<petra_dir>/exp`, which git ignores) |
 | `kernel_backend` | `none` (default) \| `geak` \| `command`: where kernel hand-offs go |
 | `kernel_backend_dir` | `geak` back end: the GEAK checkout providing `kernel_workflow/kernel_lane.js` |
 | `kernel_backend_command` | `command` back end: shell command with `{task_dir}`, `{out_dir}`, `{gpu_ids}` |
@@ -358,8 +369,9 @@ status; one that ends at the Intake (questions, a rejection) or before Setup cre
 which every container started with `--ipc=host` shares with the host and no other machine sees — and
 frees it at the end of its report. While another task holds it, a new run ends at once as `busy` and
 names the holder. A lock whose run finished, or wrote nothing in its run directory for twice its
-longest agent call (12 h by default), is taken over by the next run; one left by a run that died is
-freed at once:
+longest agent call (12 h by default), is taken over by the next run. A run in another container is
+never taken over for silence, since its run directory is not visible from here; once that run is
+gone, the second command frees the machine, as it frees one a run that died left behind:
 
 ```bash
 python3 scripts/run_lock.py status            # who holds this machine
@@ -396,7 +408,7 @@ keeps one Petra task per machine (`acquire`, `release`, `status`).
 
 ```bash
 GEAK_HOME=/path/to/GEAK node tests/dry_run.mjs   # every control path of petra.js on GEAK's runtime, no GPU
-python3 -m unittest discover -s tests             # the scripts' parsers and rules, the bootstrap, the two READMEs in step; offline
+python3 -m unittest discover -s tests             # the scripts' parsers and rules, the bootstrap, Claude Code's workflow rules, the two READMEs in step; offline
 ```
 
 ## Layout
@@ -422,7 +434,8 @@ Petra/
 │                            # restore_owner.sh
 ├── petra/bootstrap.py       # setup step 3, in the container; safe to re-run
 ├── setup.py, pyproject.toml # packaging; setup.py runs the bootstrap when pip builds the wheel
-├── tests/                   # dry run of petra.js, unit tests of the scripts, the bootstrap and the READMEs
+├── tests/                   # dry run of petra.js, unit tests of the scripts, the bootstrap, Claude Code's
+│                            # workflow rules and the READMEs
 ├── README.md, README.zh-CN.md
 └── docs/design.md
 ```

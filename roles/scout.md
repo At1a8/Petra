@@ -10,7 +10,7 @@ Read: `knowledge/dispatch.md`, `knowledge/issue_triage.md` §1, `knowledge/ci_tr
 Inputs: `sources` (any of `upstream`, `issues`, `ci`, `hardware`, `perf`), `since` (date or commit;
 default: the previous scan under `exp_root`, else 7 days), `framework_dir`.
 
-1. Choose `RUN_DIR=<exp_root>/scan_<YYYYmmdd-HHMMSS>` (time from `date`, timezone stated) and take the
+1. Choose `RUN_DIR=<exp_root>/scan_<time>`, `<time>` from `date -u +%Y%m%d-%H%M%SZ` (UTC), and take the
    machine first — one Petra task per machine: `python3 <petra_dir>/scripts/run_lock.py acquire
    --run-dir RUN_DIR --mode scan --task scan --idle-hours <lock_idle_hours>`. Exit 1 means another
    task holds it: create nothing and return `lock: "busy"`, `run_dir: ""`, `candidates_path: ""`, with

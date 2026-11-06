@@ -99,8 +99,8 @@ class RunLockTest(unittest.TestCase):
     def test_a_finished_or_silent_run_is_taken_over(self):
         t0 = 1_000_000.0
         run_lock.acquire(self.lock, self.a, idle_hours=12, now=t0)
-        (Path(self.a) / "report.md").write_text("done")
-        os.utime(Path(self.a) / "report.md", (t0 + 60, t0 + 60))
+        (Path(self.a) / "run_report.md").write_text("done")
+        os.utime(Path(self.a) / "run_report.md", (t0 + 60, t0 + 60))
         took = run_lock.acquire(self.lock, self.b, now=t0 + 120)
         self.assertEqual((took["status"], took["took_over"]["reason"]), ("acquired", "its run finished"))
         Path(self.b).mkdir()
@@ -110,11 +110,19 @@ class RunLockTest(unittest.TestCase):
         self.assertEqual((late["status"], late["took_over"]["reason"]), ("acquired", "its run wrote nothing for 12 h"))
 
     def test_an_old_report_does_not_free_a_resumed_run(self):
-        (Path(self.a) / "report.md").write_text("stopped at Design")
-        os.utime(Path(self.a) / "report.md", (1000.0, 1000.0))
+        (Path(self.a) / "run_report.md").write_text("stopped at Design")
+        os.utime(Path(self.a) / "run_report.md", (1000.0, 1000.0))
         run_lock.acquire(self.lock, self.a, now=2000.0)
         os.utime(self.a, (2000.0, 2000.0))
         self.assertEqual(run_lock.acquire(self.lock, self.b, now=2100.0)["status"], "busy")
+
+    def test_a_run_in_another_container_is_not_taken_over_for_silence(self):
+        """Its run directory is in that container: invisible here, so silence proves nothing."""
+        other = str(self.root / "elsewhere" / "issue_41299-glm-dcp_20261106-071502Z")
+        run_lock.acquire(self.lock, other, idle_hours=12, now=1000.0)
+        self.assertEqual(run_lock.acquire(self.lock, self.a, now=1000.0 + 48 * 3600)["status"], "busy")
+        self.assertEqual(run_lock.release(self.lock, force=True)["status"], "released")
+        self.assertEqual(run_lock.acquire(self.lock, self.a)["status"], "acquired")
 
     def test_force_release_and_the_command_line(self):
         run_lock.acquire(self.lock, self.a)

@@ -47,8 +47,9 @@ below are about those.
   those, checks out main and pulls, once per container. Never `pip install -e` from it afterwards: its
   `pyproject.toml` is upstream's, which would pull CUDA packages into the ROCm environment.
 - The checkout is the container's, and a task's branch and commits stay in it; the PR engineer writes
-  them to `RUN_DIR/patches`, so the change leaves the container with the run directory. A task starts
-  only from a clean checkout: changes left there stop Setup and are never discarded.
+  them to `RUN_DIR/patches`, so the change can leave the container with the run directory (README step
+  5). Run directories are the container's too, in `<petra_dir>/exp`. A task starts only from a clean
+  checkout: changes left there stop Setup and are never discarded.
 - Run every server, test and benchmark from the tree under test, first on `PYTHONPATH` (sglang:
   `PYTHONPATH=<tree>/python`), and check it once per launch script:
   `python -c "import sglang; print(sglang.__file__)"` must print a path inside that tree. The feature
@@ -64,8 +65,9 @@ below are about those.
 
 ## Servers
 
-- One launch script with a mode switch and a tag; one log per launch named `<tag>_<timestamp>` with the
-  timezone stated (container logs are often UTC, the host may be another zone).
+- One launch script with a mode switch and a tag; one log per launch, `RUN_DIR/logs/<tag>_<time>.log`
+  with `<time>` from `date -u +%Y%m%d-%H%M%SZ` (container logs are often UTC, the host may be another
+  zone; the Z says which).
 - Poll the health endpoint before using a server; read the effective configuration from the
   `server_args=` log line.
 - Know the process name you are looking for: `sglang serve ...` and `python -m sglang.launch_server`

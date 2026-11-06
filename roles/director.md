@@ -21,9 +21,12 @@ that passes), `resume_run_dir`, `lock_idle_hours`.
 1. **Run directory.** If `resume_run_dir` is set, reuse it: check that it exists, that its branch
    exists in `framework_dir` and is checked out there (check it out when the checkout is clean), and
    re-run one baseline smoke to confirm the environment still matches the ledger.
-   Otherwise create `RUN_DIR=<exp_root>/<mode>_<slug>_<YYYYmmdd-HHMMSS>` (take the time from `date`, state
-   the timezone) and write the inputs — the task definition (`templates/task_definition.md`) and the
-   intake's `assumptions` — to `RUN_DIR/run.json`. On a retry, first look for the run directory, branch
+   Otherwise create `RUN_DIR=<exp_root>/<mode>_<slug>_<time>`: `<slug>` a short lowercase name of the
+   task, its issue, PR or CI job number and two or three words (`41299-glm-dcp`) or the feature
+   (`hisparse-v2`); `<time>` from `date -u +%Y%m%d-%H%M%SZ`, UTC whatever the container's clock says.
+   Write the inputs — the task definition (`templates/task_definition.md`), the intake's
+   `assumptions` and the container (`$PETRA_CONTAINER`), which holds the task's branch — to
+   `RUN_DIR/run.json`. Logs go to `RUN_DIR/logs/`. On a retry, first look for the run directory, branch
    and worktree an earlier attempt created for this task (the newest `<mode>_<slug>_*` whose `run.json`
    holds this definition) and reuse them.
 2. **The task's branch.** The task works in `framework_dir` itself, the `worktree` you return: for
@@ -47,8 +50,9 @@ that passes), `resume_run_dir`, `lock_idle_hours`.
    exactly these, through `HIP_VISIBLE_DEVICES`. Servers, tests and benchmarks run where Petra runs,
    normally inside the container. When `container` is set (Petra on the host), run them with
    `docker exec <container> ...` and check the worktree is visible there at the same path. Write one
-   launch script with a mode switch (baseline / feature) and a tag; one log per launch; poll the health
-   endpoint; read the effective `server_args=` line.
+   launch script with a mode switch (baseline / feature) and a tag; one log per launch,
+   `RUN_DIR/logs/<tag>_<time>.log` with the same UTC time; poll the health endpoint; read the effective
+   `server_args=` line.
    - The launch script and every test command put the tree they run first on `PYTHONPATH` (sglang:
      `<tree>/python`): the worktree for the feature mode, `RUN_DIR/base` for the baseline mode when there
      is one. The first log shows `sglang.__file__` inside that tree (`env_hygiene.md`, *The code under
@@ -119,7 +123,7 @@ produced so far.
 - `ready_for_review`: write `RUN_DIR/validation_report.md` (`templates/validation_report.md`); every
   number points at an artifact; list the PR body path and the push command for the human.
 - Any other status (`blocked`, `stopped`, `awaiting_design_review`, `triaged`, `not_reproduced`,
-  `fixed_on_main`, `diagnosed`, `handed_off`, `dropped`, `queued`): write `RUN_DIR/report.md` with what was
+  `fixed_on_main`, `diagnosed`, `handed_off`, `dropped`, `queued`): write `RUN_DIR/run_report.md` with what was
   done, the evidence, where and why the run stopped, and the exact next step for a human (what to
   review, approve, post or hand over).
 - Always list hand-offs with their status (`recorded`, `integrated`, `no_gain`, `failed`,
@@ -127,6 +131,11 @@ produced so far.
   arguments that would run them later (`kernel_backend=geak` with `kernel_backend_dir`, or
   `kernel_backend=command` with `kernel_backend_command`; `knowledge/kernel_backends.md`). List reply
   drafts. State the timezone of every time.
+- Remove the baseline worktree if there is one (`git -C <framework_dir> worktree remove --force
+  RUN_DIR/base`): the run directory keeps what the run found, not a copy of the code.
+- Add one row to `<exp_root>/index.md`, every run's line in one place (create it with this header when
+  it is missing): `| start (UTC) | mode | task | status | container | run directory |`, with the run
+  directory's name and the task in a few words.
 - Then hand everything this run wrote back to its owners:
   `scripts/restore_owner.sh <exp_root>` (`env_hygiene.md`).
 - Last, free the machine for the next task: `python3 <petra_dir>/scripts/run_lock.py release --run-dir

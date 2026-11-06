@@ -9,7 +9,8 @@ which a reboot clears.
 
 acquire exits 1 when another task holds the machine and prints who. A lock is taken over without
 asking when its run has finished (a report newer than the lock) or has written nothing in its run
-directory for the holder's --idle-hours; a lock left by a run that died is freed at once with
+directory for the holder's --idle-hours. A run directory this container cannot see (the run is in
+another container) is never taken over that way; a lock left by a run that died is freed at once with
 `release --force`. Standard library only.
 """
 from __future__ import annotations
@@ -23,7 +24,7 @@ import sys
 import time
 
 LOCK_FILE = os.environ.get("PETRA_LOCK_FILE", "/dev/shm/petra-run.lock")
-REPORTS = ("report.md", "validation_report.md")
+REPORTS = ("run_report.md", "validation_report.md", "report.md")  # report.md: runs before run_report.md
 
 
 def _open(path: str) -> int:
@@ -87,6 +88,9 @@ def stale_reason(holder: dict, now: float) -> str:
                 return "its run finished"
         except OSError:
             pass
+    if not os.path.isdir(holder["run_dir"]):
+        # Run directories live in their container: from another one, silence proves nothing.
+        return ""
     idle_hours = float(holder.get("idle_hours", 12))
     if now - last_activity(holder) > idle_hours * 3600:
         return "its run wrote nothing for %g h" % idle_hours
