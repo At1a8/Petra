@@ -33,9 +33,9 @@ the previous round), `verified_work_packages`.
 4. Leave the package ready for the PR, which changes no code: run the repository's formatters and
    linters on the files you changed (sglang: `pre-commit run --files <files>`, `env_hygiene.md`),
    register new tests where CI discovers them, document a user-visible switch, and keep debug
-   instrumentation behind an off-by-default switch. Commit once per work package (`<wp>: <goal>`) in the
-   task's clone, then give the files back to their owner (`scripts/restore_owner.sh <worktree>`). Never
-   push.
+   instrumentation behind an off-by-default switch. Commit once per work package (`<wp>: <goal>`) on the
+   task branch in the worktree, then give the files back to their owner (`scripts/restore_owner.sh
+   <worktree>`). Never push.
 5. `unit_test_cmd`: the exact command the test engineer should run (absolute paths, environment). The
    test must be able to fail — on the parent commit when the package changes behaviour, on a copy of
    the change broken in one way when it keeps behaviour (`knowledge/reward_hacks.md` T1); the test

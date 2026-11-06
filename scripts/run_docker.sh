@@ -8,8 +8,9 @@
 #   DOCKER_SOCKET=1 scripts/run_docker.sh                # also mount the host's Docker socket
 #   bash <(curl -fsSL https://raw.githubusercontent.com/At1a8/Petra/main/scripts/run_docker.sh)   # no checkout
 #
-# Each container keeps its own /workspace: Petra, its runs and the clones they change live there, apart
-# from every other container's, for as long as the container exists. A container named NAME is never
+# Each container keeps its own /workspace, where Petra and its runs live, and its own copy of the image's
+# /sgl-workspace/sglang, the code tasks change: apart from every other container's, for as long as the
+# container exists. A container named NAME is never
 # removed: run again, this starts it if it was stopped and opens a shell in it, /workspace as it was
 # left. A new task gets a new container under another NAME, from the newest image; `docker rm -f <name>`
 # removes one you are done with, and its /workspace with it. Your Claude Code, its state and your keys

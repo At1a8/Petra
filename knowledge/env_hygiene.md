@@ -6,9 +6,10 @@ accidents.
 
 ## Git: as root in the container, give the files back
 
-Petra runs git inside the container, as root. Its own checkouts in the container's `/workspace` (Petra,
-the run directories with the task clones) are root's; a checkout on a host mount (a `framework_dir`
-under `/home`, a run directory copied out) belongs to a host user, and the rules below are about those.
+Petra runs git inside the container, as root. What it works in inside the container (Petra and the run
+directories in `/workspace`, the image's `/sgl-workspace/sglang`) is root's; a checkout on a host mount
+(a `framework_dir` under `/home`, a run directory copied out) belongs to a host user, and the rules
+below are about those.
 
 - Any git write as root (worktree add, fetch, commit, cherry-pick, rebase, `pre-commit install`) leaves
   root-owned files in `.git` (refs, objects, `ORIG_HEAD`, hooks) and in the worktree. The next host-side
@@ -16,8 +17,8 @@ under `/home`, a run directory copied out) belongs to a host user, and the rules
   **after** updating the working tree and index but **before** moving the branch ref, leaving hundreds
   of staged changes on an old HEAD.
 - So after every git write, and before handing over a push command, give them back:
-  `<petra_dir>/scripts/restore_owner.sh <run_dir>` — the task's clone and its `.git` live there — plus
-  the `.git` of any host checkout you fetched into (each path goes to the owner of its closest ancestor
+  `<petra_dir>/scripts/restore_owner.sh <run_dir> <worktree>/.git`, plus the `.git` of any other host
+  checkout you fetched into (each path goes to the owner of its closest ancestor
   that is not root's; nothing happens when not root, in the container's `/workspace`, or for the image's
   own checkout).
 - Detect leftovers: `find <repo>/.git ! -user "$(stat -c %U <repo>)" | head`.
@@ -37,21 +38,25 @@ under `/home`, a run directory copied out) belongs to a host user, and the rules
 
 ## The code under test
 
-- The image provides the runtime — PyTorch, aiter, sgl-kernel — and its own copy of the framework,
-  installed in editable mode from the image's checkout (`/sgl-workspace/sglang` in `rocm/sgl-dev`). A
-  plain `python -m sglang.launch_server` runs that copy, never the task's changes.
-- That checkout has the whole history and is Petra's default `framework_dir`: `git fetch` brings it the
-  current main, without touching its working tree, which stays detached at the image's commit with the
-  image's build changes. Each task works in its own clone under `RUN_DIR/wt`, seeded from it with
-  `git clone --reference <framework_dir> --dissociate <origin URL>`: a standalone repository inside the
-  run directory, so the run directory carries its branch and commits wherever it is copied, which a
-  worktree of the image's checkout would not.
-- Run every server, test and benchmark from the worktree under test, first on `PYTHONPATH` (sglang:
-  `PYTHONPATH=<worktree>/python`), and check it once per launch script:
-  `python -c "import sglang; print(sglang.__file__)"` must print a path inside the worktree. Both arms
-  of an A/B run from the worktree: the baseline at the base commit or with the feature off, never the
-  image's copy.
-- Tasks test the newest sglang: the task's clone starts from the current upstream main and, unless the user
+- The image provides the runtime — PyTorch, aiter, sgl-kernel — and the framework, installed in
+  editable mode from the image's checkout (`/sgl-workspace/sglang` in `rocm/sgl-dev`): a plain
+  `python -m sglang.launch_server` runs whatever is checked out there.
+- That checkout has the whole history and is Petra's default `framework_dir`, and each task works in it
+  on its own branch. The image leaves it detached at the commit it built, with the build's changes to
+  the packaging files (`python/pyproject.toml` becomes the ROCm one); setup (README step 3) discards
+  those, checks out main and pulls, once per container. Never `pip install -e` from it afterwards: its
+  `pyproject.toml` is upstream's, which would pull CUDA packages into the ROCm environment.
+- The checkout is the container's, and a task's branch and commits stay in it; the PR engineer writes
+  them to `RUN_DIR/patches`, so the change leaves the container with the run directory. A task starts
+  only from a clean checkout: changes left there stop Setup and are never discarded.
+- Run every server, test and benchmark from the tree under test, first on `PYTHONPATH` (sglang:
+  `PYTHONPATH=<tree>/python`), and check it once per launch script:
+  `python -c "import sglang; print(sglang.__file__)"` must print a path inside that tree. The feature
+  arm runs the worktree on the task branch; the baseline arm runs with the feature off, or at the base
+  commit from a worktree of the same repository (`RUN_DIR/base`), since the checkout cannot be on two
+  commits at once. A scan reads the current main from one more such worktree (`RUN_DIR/main`, removed
+  at the end), whatever the checkout is on.
+- Tasks test the newest sglang: the task's branch starts from the current upstream main and, unless the user
   named an image or a container, the image is the newest daily build for its ROCm and GPU
   (`scripts/latest_image.py`, which `scripts/run_docker.sh` starts from; the `miles` images are for
   reinforcement learning). Compiled packages too old for the worktree fail at import or startup: that is

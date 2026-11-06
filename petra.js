@@ -24,7 +24,7 @@ export const meta = {
     'args.agent_timeout_ms.',
   phases: [
     { title: 'Intake', detail: 'intake: turn a request, or a definition with gaps, into a complete task definition; questions when something is missing' },
-    { title: 'Setup', detail: 'director: run dir, the task\'s own clone and branch, launch scripts, baseline (not in scan)' },
+    { title: 'Setup', detail: 'director: run dir, the task\'s branch in the framework checkout, launch scripts, baseline (not in scan)' },
     { title: 'Spec', detail: 'director: feature_spec.md with measurable acceptance criteria [feature]' },
     { title: 'Recon', detail: 'analyst: code map and assumption table, gap type and level [feature]' },
     { title: 'Design', detail: 'architect: work packages, invariants, memory budget, startup rejections [feature]' },
@@ -254,8 +254,8 @@ async function intakeStage(raw) {
   };
 }
 
-// sglang images carry a full-history checkout of sglang, the default framework source; each task works in
-// its own clone of it under RUN_DIR, which outlives the container.
+// sglang images carry a full-history checkout of sglang and install sglang from it in editable mode; each
+// task works in it on its own branch, so what runs is what is checked out.
 const IMAGE_SGLANG = '/sgl-workspace/sglang';
 const START = await intakeStage(!RAW.framework_dir && String(RAW.framework || 'sglang').trim().toLowerCase() === 'sglang'
   ? { ...RAW, framework_dir: IMAGE_SGLANG } : RAW);
@@ -341,12 +341,12 @@ function rolePrompt(role, sub, ins, attempt) {
     ? 'No RUN_DIR exists yet: change nothing; every check you run is read-only. Never push, never post on GitHub.'
     : `Write artifacts only under RUN_DIR (code changes only in the
 task worktree named in the inputs). Never push, never post on GitHub.
-Framework code runs from the worktree under test, never from the copy installed in the image: put it
-first on PYTHONPATH (sglang: <worktree>/python) for every server, test and benchmark.
+Framework code runs from the tree under test, the task worktree (or RUN_DIR/base for a baseline at the
+base commit): put it first on PYTHONPATH (sglang: <tree>/python) for every server, test and benchmark.
 Use only the GPUs in gpu_ids: export HIP_VISIBLE_DEVICES=<gpu_ids> for every server, test and
 benchmark. Touch only the processes, servers and containers this run started (knowledge/guardrails.md).
 As root in the container, give back what you write under /home: after every git write and before you
-return, run ${PETRA}/scripts/restore_owner.sh on RUN_DIR, which holds the task's clone and its .git
+return, run ${PETRA}/scripts/restore_owner.sh on RUN_DIR and on the worktree's .git
 (knowledge/env_hygiene.md).`;
   const retry = attempt > 1 ? `
 This is attempt ${attempt}: an earlier attempt of this call failed and may have left work behind —

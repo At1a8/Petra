@@ -7,7 +7,8 @@ and names in PETRA_HOST_HOME. Run this once in every new container (README step 
 
 Every step checks first, keeps what is already there and installs or creates only what is missing.
 Nothing is deleted, overwritten or re-cloned: a step that could only proceed by changing existing
-state warns and leaves it alone.
+state warns and leaves it alone. The one exception is the image's own sglang checkout, which the
+framework step puts on main once, discarding only the image build's changes to its packaging files.
 
   checkout      clone Petra to $PETRA_HOME, unless run inside a checkout or one is already there
   host-home     (root in a container) find your home on the host; without it nothing else is set up,
@@ -21,8 +22,10 @@ state warns and leaves it alone.
   shell         (root in a container) no __pycache__ in the checkouts, no Claude Code self-update, the
                 keys kept on the host in ~/.petra_env, and with LLM_GATEWAY_KEY Claude Code on the AMD LLM
                 gateway
-  framework     the image's /sgl-workspace/sglang (whole history) by default; --framework-dir names a host
-                checkout instead, cloned with its whole history if missing
+  framework     the image's /sgl-workspace/sglang by default, which the image installs sglang from in
+                editable mode: still as the image left it, it is put on main and pulled, so the current
+                main is what runs and what tasks branch from; --framework-dir names a host checkout
+                instead, cloned with its whole history if missing
   checks        git, docker (host only), ROCm, sglang, Node.js, API access, GitHub token (detect only)
 
   python3 -B -m petra.bootstrap [--framework-dir DIR]
@@ -70,8 +73,11 @@ CONTAINER_ENV = {"PYTHONDONTWRITEBYTECODE": "1", "DISABLE_AUTOUPDATER": "1"}
 # Ocp-Apim-Subscription-Key header alone; the same key as a bearer token only keeps Claude Code from
 # asking for a login, and the gateway ignores it.
 AMD_GATEWAY_URL = "https://llm-api.amd.com/Unified"
-# sglang images ship a full-history checkout of sglang; tasks clone their own working copy from it.
+# sglang images ship a full-history checkout of sglang and install sglang from it in editable mode; tasks
+# work in it, each on its own branch. The image's build rewrites its packaging files (python/pyproject.toml
+# becomes the ROCm one) and leaves it detached at the commit it built.
 IMAGE_SGLANG = "/sgl-workspace/sglang"
+PACKAGING = re.compile(r"(^|/)pyproject[^/]*\.toml$")
 GATEWAY_ENV = (
     'if [ -n "$LLM_GATEWAY_KEY" ] && [ -z "$ANTHROPIC_BASE_URL" ]; then\n'
     '  export ANTHROPIC_BASE_URL=%s\n'
@@ -501,6 +507,51 @@ def image_checkout() -> str:
     return IMAGE_SGLANG if os.path.isdir(os.path.join(IMAGE_SGLANG, ".git")) else ""
 
 
+def installed_commit() -> str:
+    """The commit the image installed sglang at, from its version (0.5.23.dev20261105+gf3532057e1)."""
+    try:
+        import importlib.metadata
+        m = re.search(r"\+g([0-9a-f]{7,})", importlib.metadata.version("sglang"))
+    except Exception:
+        return ""
+    return m.group(1) if m else ""
+
+
+def follow_main(d: str) -> tuple[str, str]:
+    """Put the image's checkout on main once: discard the build's packaging changes, check out main, pull.
+    Only a checkout as the image left it is touched: detached at the commit sglang was installed at, with
+    nothing but packaging files changed. One on a branch is already past this (Setup takes it from there)."""
+    rc, branch, _ = _out(["git", "-C", d, "symbolic-ref", "-q", "--short", "HEAD"])
+    _, head, _ = _out(["git", "-C", d, "log", "-1", "--format=%h %cs"])
+    if rc == 0 and branch:
+        log("framework: kept %s on %s (%s); the image's checkout, which tasks branch from" % (d, branch, head))
+        return "kept", "%s on %s" % (d, branch)
+    sha, built = (head.split() or [""])[0], installed_commit()
+    if built and sha and not (sha.startswith(built) or built.startswith(sha)):
+        warn("framework: %s is detached at %s, not at the commit the image installed (%s); left as it is"
+             % (d, head, built))
+        return "skipped", "detached at %s" % head
+    _, changed, _ = _out(["git", "-C", d, "diff", "--name-only", "HEAD"])
+    files = [f for f in changed.splitlines() if f]
+    other = [f for f in files if not PACKAGING.search(f)]
+    if other:
+        warn("framework: %s has changes beyond the image's packaging files (%s); left as it is, and Setup "
+             "stops on it" % (d, ", ".join(other[:5])))
+        return "skipped", "changed: %s" % ", ".join(other[:5])
+    if files and _run(["git", "-C", d, "checkout", "HEAD", "--"] + files).returncode != 0:
+        warn("framework: could not discard the image's packaging changes in %s" % d)
+        return "failed", "git checkout HEAD -- <packaging files>"
+    if _run(["git", "-C", d, "checkout", "main"]).returncode != 0:
+        warn("framework: could not check out main in %s" % d)
+        return "failed", "git checkout main"
+    if _run(["git", "-C", d, "pull", "--ff-only"]).returncode != 0:
+        warn("framework: git pull failed in %s; main stays where it was, and Setup fetches before every task" % d)
+    _, head, _ = _out(["git", "-C", d, "log", "-1", "--format=%h %cs"])
+    log("framework: %s now on main (%s)%s; never `pip install -e` from it: its pyproject.toml is upstream's"
+        % (d, head, ", the image's changes to %s discarded" % ", ".join(files) if files else ""))
+    return "updated", "%s on main (%s)" % (d, head)
+
+
 def ensure_framework(s: dict) -> tuple[str, str]:
     d = s["framework_dir"] or image_checkout()
     if not d:
@@ -509,13 +560,14 @@ def ensure_framework(s: dict) -> tuple[str, str]:
         _, head, _ = _out(["git", "-C", d, "log", "-1", "--format=%h %cs"])
         _, shallow, _ = _out(["git", "-C", d, "rev-parse", "--is-shallow-repository"])
         _, origin, _ = _out(["git", "-C", d, "remote", "get-url", "origin"])
-        log("framework: kept %s (%s)%s" % (d, head or "no commits",
-                                          "; the image's checkout, Petra's default" if d == IMAGE_SGLANG else ""))
         if shallow == "true":
             warn("framework: %s is a shallow clone; ci bisects and the upstream scan need its history. "
                  "It is left as it is (`git -C %s fetch --unshallow` would deepen it)" % (d, d))
         if origin and _repo_key(origin) != _repo_key(s["framework_repo"]):
             warn("framework: %s tracks %s, not %s; kept as it is" % (d, origin, s["framework_repo"]))
+        if d == IMAGE_SGLANG:
+            return follow_main(d)
+        log("framework: kept %s (%s)" % (d, head or "no commits"))
         return "kept", d
     if os.path.isdir(d) and os.listdir(d):
         warn("framework: %s exists and is not a git checkout; left untouched" % d)

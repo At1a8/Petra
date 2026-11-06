@@ -18,25 +18,29 @@ that passes), `resume_run_dir`, `lock_idle_hours`.
    and return `lock: "busy"`, `run_dir: ""`, `baseline_status: "skip"`, `gpu_ids: ""`, with the holder
    (its run directory, task, container and start) and the release command in `notes`. Otherwise
    `lock: "acquired"`; a lock taken over from a run that finished or went silent is noted.
-1. **Run directory.** If `resume_run_dir` is set, reuse it: check that it exists, that its clone
-   (`RUN_DIR/wt`) and branch exist, and re-run one baseline smoke to confirm the environment still
-   matches the ledger.
+1. **Run directory.** If `resume_run_dir` is set, reuse it: check that it exists, that its branch
+   exists in `framework_dir` and is checked out there (check it out when the checkout is clean), and
+   re-run one baseline smoke to confirm the environment still matches the ledger.
    Otherwise create `RUN_DIR=<exp_root>/<mode>_<slug>_<YYYYmmdd-HHMMSS>` (take the time from `date`, state
    the timezone) and write the inputs — the task definition (`templates/task_definition.md`) and the
    intake's `assumptions` — to `RUN_DIR/run.json`. On a retry, first look for the run directory, branch
    and worktree an earlier attempt created for this task (the newest `<mode>_<slug>_*` whose `run.json`
    holds this definition) and reuse them.
-2. **The task's own clone and branch.** Bring `framework_dir` up to date without touching its working
-   tree: `git -C <framework_dir> fetch origin`. The image's `/sgl-workspace/sglang` is detached at the
-   image's commit, carries build changes and is what the image's sglang is installed from: never pull,
-   check out or edit there. Then give the task its own clone under `RUN_DIR/wt`, borrowing that
-   checkout's objects so only new commits are downloaded, and standing alone afterwards:
-   `git clone --reference <framework_dir> --dissociate <its origin URL> RUN_DIR/wt`, then
-   `git -C RUN_DIR/wt checkout -b petra/<slug> <base>` (the base commit the task names, default
-   `origin/main`). The clone, with its branch and commits, is a standalone repository inside RUN_DIR, so
-   RUN_DIR carries them wherever it is copied. Give them back to their owner (`scripts/restore_owner.sh
-   RUN_DIR`, which has nothing to do in the container's `/workspace`; `env_hygiene.md`).
-   Never change a checkout a running server imports from.
+2. **The task's branch.** The task works in `framework_dir` itself, the `worktree` you return: for
+   sglang the container's `/sgl-workspace/sglang`, which the image installs sglang from in editable
+   mode, so what runs is what is checked out there (`env_hygiene.md`, *The code under test*).
+   - It must be clean: `git -C <framework_dir> status --porcelain --untracked-files=no` prints nothing.
+     Changes there (a task that died, someone's edits) stop the run: return `baseline_status: "fail"`
+     with the files in `baseline`, and never stash, reset or discard them. Still detached at the image's commit with only `pyproject*.toml`
+     changed means README step 3 has not run in this container: say so.
+   - `git -C <framework_dir> fetch origin`, then `git -C <framework_dir> checkout -b petra/<slug> <base>`
+     (the base commit the task names, default `origin/main`); on a retry or a resume, check out the
+     branch that is already there.
+   - `feature` and `perf` also get the base commit as a worktree of the same repository, for the
+     baseline arm while the task branch carries the change: `git -C <framework_dir> worktree add
+     --detach RUN_DIR/base <base>`.
+   - After git writes, `scripts/restore_owner.sh <framework_dir>/.git` (nothing to do for the image's
+     checkout). Never switch the branch while a server imports from the checkout.
 3. **Environment.** Pin the framework commit, container image, ROCm and PyTorch versions and the GPU set,
    and return it as `gpu_ids`: the given one, or, when none was given, GPUs that `rocm-smi` shows with no
    process and no memory in use, as many as the task needs (`env_hygiene.md`). Every later role uses
@@ -45,9 +49,10 @@ that passes), `resume_run_dir`, `lock_idle_hours`.
    `docker exec <container> ...` and check the worktree is visible there at the same path. Write one
    launch script with a mode switch (baseline / feature) and a tag; one log per launch; poll the health
    endpoint; read the effective `server_args=` line.
-   - The launch script and every test command run the worktree's code, first on `PYTHONPATH` (sglang:
-     `<worktree>/python`), never the copy installed in the image; the first log shows `sglang.__file__`
-     inside the worktree (`env_hygiene.md`, *The code under test*).
+   - The launch script and every test command put the tree they run first on `PYTHONPATH` (sglang:
+     `<tree>/python`): the worktree for the feature mode, `RUN_DIR/base` for the baseline mode when there
+     is one. The first log shows `sglang.__file__` inside that tree (`env_hygiene.md`, *The code under
+     test*).
    - Record the image (`$PETRA_IMAGE`, set by `scripts/run_docker.sh`; else `docker inspect` from the
      host or "unknown"), the version of the image's own sglang (`pip show sglang`) and the worktree's
      base commit. Unless the task names an image or a container, compare the image with
@@ -72,7 +77,7 @@ Return:
 ```json
 {"lock": "acquired | busy", "run_dir": "/abs/RUN_DIR", "baseline_status": "pass | fail | skip",
  "baseline": "<suites, runs, spread; or why it failed or was skipped>",
- "branch": "petra/<slug>", "worktree": "/abs/RUN_DIR/wt", "gpu_ids": "0,1,2,3",
+ "branch": "petra/<slug>", "worktree": "/sgl-workspace/sglang", "gpu_ids": "0,1,2,3",
  "notes": "<pinned commit, image, versions>"}
 ```
 

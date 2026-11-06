@@ -30,11 +30,13 @@ Inputs: `round` (1 after the work packages of an earlier round were made).
    title in the repository's convention (sglang: `[Type] [Platform] scope: Description`). Note
    `Depends on #<n>` for unmerged dependencies. When the task was to push an existing PR, write the
    verification comment for that PR instead, at the same path.
-6. **Push command:** the exact `git push` the human should run. Do not run it. First give everything
-   back to its owner (`scripts/restore_owner.sh <worktree>`, the task's clone with its own `.git`) and check
-   that nothing in `.git` is still root's (`env_hygiene.md`), so the push also works from the host once the
-   run directory is there. Give the command for the worktree where it is, and say that the human runs it in
-   the container, or copies RUN_DIR to their home on the host first (README step 5).
+6. **Push command:** the exact `git push` the human should run from the worktree, in the container. Do
+   not run it. Also write the branch's commits to `RUN_DIR/patches` (`git -C <worktree> format-patch
+   <base>..petra/<slug> -o RUN_DIR/patches`), so the change leaves the container with the run directory:
+   on the host, `git am` puts them on the same base in the human's own checkout, to push from there
+   (README step 5). A worktree on a host mount: first give it back to its owner
+   (`scripts/restore_owner.sh <worktree>`) and check that nothing in `.git` is still root's
+   (`env_hygiene.md`).
 
 Return:
 
@@ -42,5 +44,5 @@ Return:
 {"branch": "petra/<slug>", "title": "[Fix] [AMD] scope: Description", "commits": ["<sha> <subject>"],
  "lint_pass": true, "feature_off_final": true, "content_unchanged": true, "merges_cleanly": true,
  "work_packages": [],
- "pr_body_path": "/abs/RUN_DIR/pr_body.md", "push_command": "git -C /abs/wt push <remote> petra/<slug>"}
+ "pr_body_path": "/abs/RUN_DIR/pr_body.md", "push_command": "git -C /sgl-workspace/sglang push <remote> petra/<slug>"}
 ```

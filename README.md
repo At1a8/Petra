@@ -65,7 +65,7 @@ Each phase calls a role: an agent that reads `roles/<role>.md`, does its part an
 JSON; `petra.js` holds the schemas and branches only on their required fields. Four rules hold across
 the roles:
 
-- only the **implementer** edits framework source, and only in the task's own clone;
+- only the **implementer** edits framework source, and only on the task's branch;
 - the roles that measure (test engineer, verify engineer, performance engineer), the intake and the
   reviewer never edit framework source; the measuring ones never reuse anyone else's numbers but run
   everything again;
@@ -75,7 +75,7 @@ the roles:
 | Role | Phases | What it does |
 |---|---|---|
 | `intake` | Intake | turns a request in plain words, or a definition with gaps, into the task definition: decides the mode, fills fields with read-only checks, records defaults as assumptions, asks instead of guessing (a missing source of truth, model or workload, anything that would cost something to obtain), rejects what Petra does not do |
-| `director` | Setup, Spec, Report | creates the run directory and the task's own clone and branch, pins commit, image and GPUs and runs the baseline; writes the feature spec with measurable acceptance criteria; writes the final report for every outcome, with the next step for a human |
+| `director` | Setup, Spec, Report | creates the run directory and the task's branch, pins commit, image and GPUs and runs the baseline; writes the feature spec with measurable acceptance criteria; writes the final report for every outcome, with the next step for a human |
 | `scout` | Collect | gathers candidate tasks with the scripts below |
 | `dispatcher` | Dispatch | sets each candidate's gap type, level, CUDA dependencies with their AMD starting points, effort and priority, and ranks them into a queue |
 | `analyst` | Recon | maps every subsystem a feature needs to a file, function and hook in the target framework, and tables which assumptions of the source design hold on AMD; reads only |
@@ -96,16 +96,17 @@ the roles:
 
 Petra runs inside a ROCm container, as root, the way GEAK does: Claude Code, Petra, git and the
 framework's servers and tests all run there, next to the GPUs and the framework's Python environment.
-Each task gets its own container, and everything the task works on lives in that container's
-`/workspace`: Petra's checkout, the run directories and the clones of the framework they change.
-Containers do not share it, so they stay out of each other's way, and it lasts as long as its
-container. What every container needs stays in your home on the host, mounted at the same path: Claude
+Each task gets its own container, and everything the task works on lives in that container: Petra's
+checkout and the run directories in `/workspace`, and the image's own sglang in `/sgl-workspace/sglang`,
+which the task changes on its own branch. Containers do not share them, so they stay out of each
+other's way, and they last as long as their container. What every container needs stays in your home on the host, mounted at the same path: Claude
 Code, installed once, its state and your keys.
 
 Every step can be run again: it checks first, keeps what is already there and adds only what is
 missing, and run_docker.sh, run again, takes you back into the container. In the commands,
 `check || action` runs the action only when the check fails: on a new machine every action runs, and
-a second run skips them. Nothing is deleted, overwritten or re-cloned.
+a second run skips them. Nothing is deleted, overwritten or re-cloned, apart from the image build's
+packaging changes in `/sgl-workspace/sglang` (step 3).
 
 ### What the host needs
 
@@ -168,12 +169,12 @@ auto-approved, and the socket would put every container on the host within their
   and are skipped). A new day's image is pulled at its first use, about 43 GB. On MI30x, set
   `IMAGE_VARIANT=rocm10-mi30x`; for a fixed image, `IMAGE=rocm/sgl-dev:<tag>`.
 - **What is tested.** The image provides PyTorch, aiter, sgl-kernel and its own sglang checkout,
-  `/sgl-workspace/sglang`, with the whole history: Petra's default framework source, so there is no
-  sglang to clone or name. Setup fetches the current main into it, leaving its working tree as the
-  image built it, and gives each task its own clone of that main under the run directory (borrowing the
-  checkout's objects: seconds, about 0.7 GB). The task's code runs first on `PYTHONPATH`; its clone,
-  with the branch and commits, is in the run directory. The run records the image, the
-  image's sglang version and the task's base commit.
+  `/sgl-workspace/sglang`, with the whole history, which it installs sglang from in editable mode: what
+  runs is what is checked out there, so there is no sglang to clone or name. Step 3 puts it on the
+  current main; each task then works in it on its own branch from the newest main, which Setup fetches
+  first. A baseline at the base commit and a scan of the current main read worktrees of the same
+  repository under the run directory (about 0.2 GB each). The run records the image, the image's sglang
+  version and the task's base commit.
 - **One container per task.** Run again with the same `NAME`, run_docker.sh takes you back into that
   container, started again if it was stopped, with `/workspace` as you left it: it never removes a
   container. Give the next task a new container under another name (`NAME=<name>`), from the newest
@@ -204,7 +205,7 @@ claude --version    # the host's Claude Code
 | Claude Code state | kept on the host in your `~/.petra/claude` (`CLAUDE_CONFIG_DIR`, apart from your own `~/.claude`) and shared by your containers: the first-start answers and a `/login` are given once |
 | git | trusts checkouts on host mounts, which belong to you, not root (`safe.directory '*'`) |
 | shell | root's `~/.bashrc` gets `PYTHONDONTWRITEBYTECODE=1` (no root-owned `__pycache__` in your checkouts on the host), `DISABLE_AUTOUPDATER=1` (the host updates Claude Code) and loads your `~/.petra_env` from the host; with `LLM_GATEWAY_KEY` and no `ANTHROPIC_BASE_URL`, it points Claude Code at the AMD LLM gateway |
-| framework | the image's `/sgl-workspace/sglang`, Petra's default framework source, is checked and left as it is; `--framework-dir` names a host checkout instead (used as it is, or cloned with its whole history when missing) |
+| framework | the image's `/sgl-workspace/sglang`, still as the image left it (detached at the commit it built, its packaging files rewritten for ROCm), is put on main: the packaging changes discarded, then `git checkout main` and `git pull`. Never `pip install -e` from it afterwards: its `pyproject.toml` is then upstream's, which would pull CUDA packages. A checkout already on a branch, or with other changes, is left as it is; `--framework-dir` names a host checkout instead (used as it is, or cloned with its whole history when missing) |
 | checks | GPUs, sglang, API access, `GITHUB_TOKEN`, counting what `~/.petra_env` sets (detect only) |
 
 The clone runs only when `/workspace/Petra` is not there yet; the bootstrap never writes keys.
@@ -229,7 +230,12 @@ With a key, the first start asks for no login. If it asks you to select a login 
 `Paste code here if prompted >`, Claude Code has no key in this shell: enter nothing, press Ctrl-C three
 times in a row to leave, and read the end of step 3's output, which names what is missing. With a Claude
 subscription and no key, that login is the way in: pick *Claude account with subscription*, open the
-URL it prints in any browser, log in, and paste the code the page shows at that prompt. Then ask:
+URL it prints in any browser, log in, and paste the code the page shows at that prompt.
+
+Once it runs, the bottom line shows `bypass permissions on` for the whole session: that is the mode
+`--dangerously-skip-permissions` turned on, not a question. Leave it as it is (Shift+Tab would switch to
+a mode that waits for your approval before commands, and Petra's agents would stall) and type the task
+in the input box above it:
 
 ```
 use /workspace/Petra/petra.js with mode=scan, petra_dir=/workspace/Petra
@@ -261,16 +267,18 @@ Claude Code runs `petra.js` again with the same arguments plus `answers={"worklo
 
 A run that got past Setup leaves its report in its run directory under `/workspace/Petra/exp/`
 (`validation_report.md` when a PR is ready, `report.md` for any other outcome; the result names it as
-`report_path`), next to the task's own clone (`wt/`) with its branch. Petra never pushes: the report
-lists the PR body and the exact `git -C <worktree> push ...`. Run it in the container with credentials
-that can push, or copy the run directory to your home on the host first and push from there, where
-your git credentials are (`<run>` is the run directory's name):
+`report_path`). The task's branch, `petra/<slug>`, is in `/sgl-workspace/sglang`, and a run with a PR
+also leaves its commits as patches in the run directory's `patches/`. Petra never pushes: the report
+lists the PR body and the exact `git -C /sgl-workspace/sglang push ...`. Run it in the container with
+credentials that can push, or take the run directory to your home on the host and push from your own
+sglang checkout there, where your git credentials are (`<run>` is the run directory's name):
 
 ```bash
 cp -r /workspace/Petra/exp/<run> "$PETRA_HOST_HOME"/ && /workspace/Petra/scripts/restore_owner.sh "$PETRA_HOST_HOME"/<run>
 ```
 
-The copy is yours, not root's; on the host, the worktree is then `~/<run>/wt`.
+The copy is yours, not root's. On the host, in your sglang checkout, `git checkout -b petra/<slug> <base>`
+with the base commit the report names, then `git am ~/<run>/patches/*.patch`, recreates the commits.
 
 ### Re-running and options
 
@@ -317,7 +325,7 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `mode` | `feature` \| `issue` \| `ci` \| `perf` \| `scan` (required; inferred from `request` when not given) |
 | `task` | the upstream PR/design, issue URL, CI job/cluster or performance goal (required except `scan`) |
 | `goal` | what done means, measurable when the mode measures; the spec and the performance plan address it |
-| `framework_dir` | the checkout Petra takes history and the current main from; each task works in its own clone of it (for sglang the image's `/sgl-workspace/sglang` by default) |
+| `framework_dir` | the framework checkout each task works in, on its own branch from the current main (for sglang the image's `/sgl-workspace/sglang` by default, which the image installs sglang from) |
 | `model_path` | the model the baseline and the gates run (required for `feature` and `perf`) |
 | `framework`, `platform`, `gpu_ids` | target and environment (`sglang`; empty `gpu_ids` lets Setup pick idle GPUs, which every later role then uses through `HIP_VISIBLE_DEVICES`) |
 | `workload` | the benchmark every measurement uses, e.g. `{"isl":8192,"osl":1024,"conc":64}`; required for `perf`, fixed at Setup |

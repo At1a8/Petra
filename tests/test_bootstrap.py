@@ -461,19 +461,39 @@ class FrameworkTest(unittest.TestCase):
             with mock.patch.object(bs, "IMAGE_SGLANG", os.path.join(d, "no-image-checkout")), Quiet():
                 self.assertEqual(bs.ensure_framework(S(d))[0], "skipped")
 
-    def test_the_image_checkout_is_the_default(self):
+    def image_framework(self, d, branch="", changed="", built="f3532057e1"):
+        """ensure_framework on a fake image checkout; returns (result, the git commands it ran)."""
+        image = Path(d) / "sgl-workspace" / "sglang"
+        (image / ".git").mkdir(parents=True, exist_ok=True)
+        answers = {"log": (0, "f3532057e1 2026-11-05", ""), "rev-parse": (0, "false", ""),
+                   "remote": (0, "https://github.com/sgl-project/sglang.git", ""),
+                   "symbolic-ref": (0, branch, "") if branch else (1, "", ""), "diff": (0, changed, "")}
+        with mock.patch.object(bs, "IMAGE_SGLANG", str(image)), mock.patch.object(bs, "installed_commit", return_value=built), \
+                mock.patch.object(bs, "_out", side_effect=lambda cmd: answers[cmd[3]]), \
+                mock.patch.object(bs, "_run", return_value=OK) as run, Quiet():
+            res = bs.ensure_framework(S(d))
+            self.assertNotIn("framework_dir=", bs.next_steps(bs.settings({"PWD": d, "HOME": d}), {}, {"api": True},
+                                                             path_env="/usr/bin"))
+        return res, [c.args[0][3:] for c in run.call_args_list], str(image)
+
+    def test_the_image_checkout_on_a_branch_is_kept(self):
         with tempfile.TemporaryDirectory() as d:
-            image = Path(d) / "sgl-workspace" / "sglang"
-            (image / ".git").mkdir(parents=True)
-            answers = {"log": (0, "1ced9a9 2026-11-02", ""), "rev-parse": (0, "false", ""),
-                       "remote": (0, "https://github.com/sgl-project/sglang.git", "")}
-            with mock.patch.object(bs, "IMAGE_SGLANG", str(image)), \
-                    mock.patch.object(bs, "_out", side_effect=lambda cmd: answers[cmd[3]]), \
-                    mock.patch.object(bs, "_run") as run, Quiet():
-                self.assertEqual(bs.ensure_framework(S(d)), ("kept", str(image)))
-                s = bs.settings({"PWD": d, "HOME": d})
-                self.assertNotIn("framework_dir=", bs.next_steps(s, {}, {"api": True}, path_env="/usr/bin"))
-            run.assert_not_called()
+            res, ran, image = self.image_framework(d, branch="main")
+            self.assertEqual((res, ran), (("kept", "%s on main" % image), []))
+
+    def test_the_image_checkout_as_the_image_left_it_goes_on_main(self):
+        with tempfile.TemporaryDirectory() as d:
+            res, ran, image = self.image_framework(d, changed="python/pyproject.toml\npython/sglang/kernels/aot/pyproject_rocm.toml")
+            self.assertEqual(res[0], "updated")
+            self.assertEqual(ran, [["checkout", "HEAD", "--", "python/pyproject.toml", "python/sglang/kernels/aot/pyproject_rocm.toml"],
+                                   ["checkout", "main"], ["pull", "--ff-only"]])
+
+    def test_the_image_checkout_is_left_alone_unless_as_the_image_left_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            res, ran, _ = self.image_framework(d, changed="python/pyproject.toml\npython/sglang/srt/server_args.py")
+            self.assertEqual((res[0], ran), ("skipped", []))
+            res, ran, _ = self.image_framework(d, built="0123456789")
+            self.assertEqual((res[0], ran), ("skipped", []))
 
     def test_existing_checkout_is_kept_as_it_is(self):
         with tempfile.TemporaryDirectory() as d:

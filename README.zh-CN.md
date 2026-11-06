@@ -38,7 +38,7 @@ kernel 级的工作——调优 Petra 为某个特性写的 kernel，或者 kern
 
 每个阶段调用一个角色：一个读取 `roles/<role>.md`、完成自己那部分工作并返回结构化 JSON 的 agent；`petra.js` 持有这些 schema，并且只根据其中的必填字段做分支。所有角色都遵守四条规则：
 
-- 只有 **implementer** 修改框架源码，而且只在任务自己的 clone 里改；
+- 只有 **implementer** 修改框架源码，而且只在任务自己的分支上改；
 - 负责测量的角色（test engineer、verify engineer、performance engineer）、intake 和 reviewer 从不修改框架源码；负责测量的角色从不复用别人的数据，而是全部重新跑一遍；
 - **curator** 只修改 Petra 自己的 `knowledge/`，并且不提交，留给人审阅；
 - 没有任何角色会 push 或发帖：PR engineer 只返回确切的 `git push` 命令，issue 回复都是草稿。
@@ -46,7 +46,7 @@ kernel 级的工作——调优 Petra 为某个特性写的 kernel，或者 kern
 | 角色 | 阶段 | 职责 |
 |---|---|---|
 | `intake` | Intake | 把一句话的需求或不完整的定义整理成任务定义：判断模式，用只读检查补全字段，把采用的默认值记为假设；缺任务依据、模型或负载，或者某项信息要付出代价才能拿到时，提问而不是猜；拒绝 Petra 不做的事 |
-| `director` | Setup、Spec、Report | 创建运行目录以及任务自己的 clone 和分支，固定 commit、镜像和 GPU 并跑基线；写出验收标准可测量的特性说明（feature spec）；为每种结局写最终报告，并写明人接下来该做什么 |
+| `director` | Setup、Spec、Report | 创建运行目录和任务自己的分支，固定 commit、镜像和 GPU 并跑基线；写出验收标准可测量的特性说明（feature spec）；为每种结局写最终报告，并写明人接下来该做什么 |
 | `scout` | Collect | 用下文的脚本收集候选任务 |
 | `dispatcher` | Dispatch | 确定每个候选任务的差距类型、难度级别、CUDA 依赖及其在 AMD 上的起点、工作量和优先级，并排序成队列 |
 | `analyst` | Recon | 把特性涉及的每个子系统映射到目标框架中的文件、函数和挂载点，并列表说明源设计的哪些假设在 AMD 上成立；只读不写 |
@@ -65,9 +65,9 @@ kernel 级的工作——调优 Petra 为某个特性写的 kernel，或者 kern
 
 ## 安装
 
-Petra 像 GEAK 一样，以 root 身份运行在 ROCm 容器里：Claude Code、Petra、git 以及框架的服务和测试都在容器里运行，紧挨着 GPU 和框架的 Python 环境。每个任务用一个自己的容器，任务用到的一切都放在这个容器的 `/workspace` 里：Petra 的 checkout、各个运行目录，以及运行要修改的框架 clone。容器之间不共享 `/workspace`，所以互不干扰；它随所在的容器保留，容器删除时一起删除。所有容器都要用的东西留在宿主机上你的 home 里，并以相同路径挂载进容器：只装一次的 Claude Code、它的状态和你的 key。
+Petra 像 GEAK 一样，以 root 身份运行在 ROCm 容器里：Claude Code、Petra、git 以及框架的服务和测试都在容器里运行，紧挨着 GPU 和框架的 Python 环境。每个任务用一个自己的容器，任务用到的一切都在这个容器里：`/workspace` 里的 Petra checkout 和各个运行目录，以及镜像自带的 sglang `/sgl-workspace/sglang`，任务在它上面开自己的分支修改。容器之间不共享这些，所以互不干扰；它们随所在的容器保留，容器删除时一起删除。所有容器都要用的东西留在宿主机上你的 home 里，并以相同路径挂载进容器：只装一次的 Claude Code、它的状态和你的 key。
 
-每一步都可以重复执行：先检查，保留已有的，只补缺的；再次运行 run_docker.sh 会回到原来的容器。命令里的 `检查 || 动作` 表示只有检查不通过时才执行动作：在新机器上每个动作都会执行，再运行一次则全部跳过。不会删除、覆盖或重新克隆任何东西。
+每一步都可以重复执行：先检查，保留已有的，只补缺的；再次运行 run_docker.sh 会回到原来的容器。命令里的 `检查 || 动作` 表示只有检查不通过时才执行动作：在新机器上每个动作都会执行，再运行一次则全部跳过。除了第 3 步丢弃镜像构建对 `/sgl-workspace/sglang` 打包文件的改动，不会删除、覆盖或重新克隆任何东西。
 
 ### 宿主机需要什么
 
@@ -103,7 +103,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/At1a8/Petra/main/scripts/run
 这一行下载 [`scripts/run_docker.sh`](scripts/run_docker.sh) 并运行它，所以宿主机上不需要 Petra 的代码；在 Petra 的 checkout 里直接运行 `scripts/run_docker.sh` 效果相同。它就是常见的 ROCm `run_docker.sh`：一个带 GPU 的特权容器，以相同路径挂载 `/home` 和存在的数据目录（`/data`、`/mnt` 等），并在容器的 `/workspace` 里打开一个 root shell。和很多同类脚本不同，它默认不挂载宿主机的 Docker socket（`DOCKER_SOCKET=1` 才挂）：Petra 的 agent 以 root 身份、自动批准权限运行，挂上 socket 就能操作宿主机上的所有容器。
 
 - **镜像。** 任务要在最新的 sglang 上测试，所以默认使用 ROCm 10、MI35x 下最新的每日 `rocm/sgl-dev` 镜像（[`scripts/latest_image.py`](scripts/latest_image.py)，例如 `v0.5.23-rocm10-mi35x-20261103`；同一页面上的 `miles` 镜像用于强化学习，会被跳过）。每天的新镜像在第一次使用时拉取，约 43 GB。MI30x 设置 `IMAGE_VARIANT=rocm10-mi30x`；要固定镜像，设置 `IMAGE=rocm/sgl-dev:<tag>`。
-- **测的是哪份代码。** 镜像提供 PyTorch、aiter、sgl-kernel，以及它自带的 sglang checkout `/sgl-workspace/sglang`（带完整历史）：这就是 Petra 默认的框架来源，不需要另外克隆或指定 sglang。Setup 会把当前的 main fetch 到这个 checkout 里，但不改动它的工作区（保持镜像构建时的样子），然后在运行目录下给每个任务建一份自己的 clone，基于这个 main（借用 checkout 里已有的对象：几秒钟，约 0.7 GB）。任务的代码放在 `PYTHONPATH` 最前面运行；它的 clone 连同分支和 commit 都在运行目录里。运行记录会写下镜像、镜像里 sglang 的版本和任务的基础 commit。
+- **测的是哪份代码。** 镜像提供 PyTorch、aiter、sgl-kernel，以及它自带的 sglang checkout `/sgl-workspace/sglang`（带完整历史），sglang 就是以 editable 方式从这里安装的：这里检出的是什么，运行的就是什么，所以不需要另外克隆或指定 sglang。第 3 步把它切到当前的 main；之后每个任务都在它上面、从最新的 main 开自己的分支，Setup 会先 fetch。在基础 commit 上跑的 baseline 和 scan 读的当前 main，用的是同一个仓库在运行目录下的 worktree（每个约 0.2 GB）。运行记录会写下镜像、镜像里 sglang 的版本和任务的基础 commit。
 - **一个任务一个容器。** 用同一个 `NAME` 再次运行时，run_docker.sh 会回到那个容器（已停止的会先启动），`/workspace` 保持你离开时的样子：它从不删除容器。下一个任务换个名字开新容器（`NAME=<name>`），用的是最新的镜像；不再需要的容器用 `docker rm -f <name>` 删除，它的 `/workspace` 也随之删除。不管有多少个容器，一台机器同时只跑一个 Petra 任务（[运行](#运行)）。你自己的 run_docker.sh 也可以用，只要它以相同路径挂载你的 home，并把它作为 `PETRA_HOST_HOME` 传进容器（`-e PETRA_HOST_HOME=$HOME`）。
 
 此时还不能调用 `claude`：宿主机上的程序通过 `/home` 挂载出现在容器里，但不在 root 的 `PATH` 上（`claude: command not found`）。第 3 步会创建链接；容器里不安装任何东西。
@@ -126,7 +126,7 @@ claude --version    # 宿主机上的 Claude Code
 | Claude Code 状态 | 保存在你宿主机上的 `~/.petra/claude`（`CLAUDE_CONFIG_DIR`，与你自己的 `~/.claude` 分开），你的各个容器共用：首次启动时的回答和 `/login` 登录只需做一次 |
 | git | 信任宿主机挂载目录里的 checkout，它们属于你而不是 root（`safe.directory '*'`） |
 | shell | 在 root 的 `~/.bashrc` 里设置 `PYTHONDONTWRITEBYTECODE=1`（你宿主机上的 checkout 里不会出现 root 所有的 `__pycache__`）、`DISABLE_AUTOUPDATER=1`（由宿主机更新 Claude Code），并加载你宿主机上的 `~/.petra_env`；设置了 `LLM_GATEWAY_KEY` 且没有 `ANTHROPIC_BASE_URL` 时，让 Claude Code 走 AMD LLM 网关 |
-| 框架 | 检查镜像里的 `/sgl-workspace/sglang`（Petra 默认的框架来源），原样保留；用 `--framework-dir` 可以改用宿主机上的 checkout（已有的原样使用，缺失时带完整历史克隆） |
+| 框架 | 镜像里的 `/sgl-workspace/sglang` 如果还是镜像留下的样子（detached 在构建时的 commit 上，打包文件被改成了 ROCm 版），就把它切到 main：丢弃这些打包改动，然后 `git checkout main`、`git pull`。之后不要在这里 `pip install -e`：这时它的 `pyproject.toml` 是上游默认的版本，会装进 CUDA 的包。已经在某个分支上、或者有其他改动的 checkout 原样保留；用 `--framework-dir` 可以改用宿主机上的 checkout（已有的原样使用，缺失时带完整历史克隆） |
 | 检查 | GPU、sglang、API 访问、`GITHUB_TOKEN`，`~/.petra_env` 里设置的也算（只检测） |
 
 只有 `/workspace/Petra` 还不存在时才会克隆；bootstrap 从不写入 key。
@@ -145,7 +145,9 @@ cd /workspace/Petra && IS_SANDBOX=1 claude --dangerously-skip-permissions
 | Is this a project you trust? | **Yes, I trust this folder**；默认选项会退出 |
 | Bypass Permissions mode | **Yes, I accept**；默认选项会退出 |
 
-有 key 时，首次启动不会要求登录。如果它让你选择登录方式（select a login method），或者显示 `Paste code here if prompted >`，说明这个 shell 里的 Claude Code 没有拿到 key：什么都不要输入，连按三次 Ctrl-C 退出，然后看第 3 步输出的最后几行，那里写明了缺什么。用 Claude 订阅、没有 key 时，这个登录才是入口：选择 *Claude account with subscription*，在任意浏览器里打开它打印出的 URL，登录后把页面上显示的授权码粘贴到这个提示后面。然后输入：
+有 key 时，首次启动不会要求登录。如果它让你选择登录方式（select a login method），或者显示 `Paste code here if prompted >`，说明这个 shell 里的 Claude Code 没有拿到 key：什么都不要输入，连按三次 Ctrl-C 退出，然后看第 3 步输出的最后几行，那里写明了缺什么。用 Claude 订阅、没有 key 时，这个登录才是入口：选择 *Claude account with subscription*，在任意浏览器里打开它打印出的 URL，登录后把页面上显示的授权码粘贴到这个提示后面。
+
+启动完成后，最下面一行会一直显示 `bypass permissions on`：这是 `--dangerously-skip-permissions` 打开的模式，不是在问你问题。保持这个模式不变（Shift+Tab 会切换到执行命令前要等你确认的模式，Petra 的 agent 就会停住），在它上方的输入框里输入任务：
 
 ```
 use /workspace/Petra/petra.js with mode=scan, petra_dir=/workspace/Petra
@@ -169,13 +171,13 @@ decode 太慢，帮我优化"
 
 ### 5. 运行结束后（容器内）
 
-过了 Setup 的运行会把报告留在 `/workspace/Petra/exp/` 下它自己的运行目录里（PR 准备好时是 `validation_report.md`，其他结局是 `report.md`；运行结果中的 `report_path` 给出路径），旁边就是任务自己的 clone（`wt/`）和它的分支。Petra 从不 push：报告里列出了 PR 描述和确切的 `git -C <worktree> push ...` 命令。可以在容器里用有 push 权限的凭据执行它；也可以先把运行目录复制到你宿主机上的 home，再在宿主机上 push，你的 git 凭据在那里（`<run>` 是运行目录的名字）：
+过了 Setup 的运行会把报告留在 `/workspace/Petra/exp/` 下它自己的运行目录里（PR 准备好时是 `validation_report.md`，其他结局是 `report.md`；运行结果中的 `report_path` 给出路径）。任务的分支 `petra/<slug>` 在 `/sgl-workspace/sglang` 里；准备好 PR 的运行还会把它的 commit 导成 patch，放在运行目录的 `patches/` 下。Petra 从不 push：报告里列出了 PR 描述和确切的 `git -C /sgl-workspace/sglang push ...` 命令。可以在容器里用有 push 权限的凭据执行它；也可以把运行目录带到你宿主机上的 home，在宿主机上你自己的 sglang checkout 里 push，你的 git 凭据在那里（`<run>` 是运行目录的名字）：
 
 ```bash
 cp -r /workspace/Petra/exp/<run> "$PETRA_HOST_HOME"/ && /workspace/Petra/scripts/restore_owner.sh "$PETRA_HOST_HOME"/<run>
 ```
 
-复制出来的文件属于你而不是 root；在宿主机上，worktree 就是 `~/<run>/wt`。
+复制出来的文件属于你而不是 root。在宿主机上你的 sglang checkout 里，先用报告给出的基础 commit 执行 `git checkout -b petra/<slug> <base>`，再执行 `git am ~/<run>/patches/*.patch`，就能还原这些 commit。
 
 ### 重复执行与选项
 
@@ -213,7 +215,7 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `mode` | `feature` \| `issue` \| `ci` \| `perf` \| `scan`（必填；没给时从 `request` 推断） |
 | `task` | 上游 PR / 设计、issue URL、CI job / 簇，或性能目标（`scan` 以外必填） |
 | `goal` | 什么算完成；可以测量的模式要写成可测量的；spec 和性能计划都要回应它 |
-| `framework_dir` | Petra 从中获取历史和当前 main 的 checkout；每个任务在自己的 clone 里工作（sglang 默认用镜像里的 `/sgl-workspace/sglang`） |
+| `framework_dir` | 每个任务在其中工作的框架 checkout，任务从当前的 main 开自己的分支（sglang 默认用镜像里的 `/sgl-workspace/sglang`，镜像就是从这里安装 sglang 的） |
 | `model_path` | 基线和各项门禁运行的模型（`feature` 和 `perf` 必填） |
 | `framework`、`platform`、`gpu_ids` | 目标与环境（`sglang`；`gpu_ids` 为空时由 Setup 挑选空闲的 GPU，之后每个角色都通过 `HIP_VISIBLE_DEVICES` 使用这组 GPU） |
 | `workload` | 每次测量都使用的基准负载，例如 `{"isl":8192,"osl":1024,"conc":64}`；`perf` 必填，在 Setup 时固定 |

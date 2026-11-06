@@ -11,7 +11,7 @@ of it.
 |---|---|---|---|---|---|---|
 | `mode` | the kind of task | required | required | required | required | required |
 | `task` | the source of truth: upstream PR or design URL, issue URL, CI job or tracker cluster, performance goal | required | required | required | required | — |
-| `framework_dir` | the checkout Petra takes history and the current main from; each task works in its own clone of it (absolute path; for sglang the image's `/sgl-workspace/sglang` when not given) | required | required | required | required | the upstream scan reads it |
+| `framework_dir` | the framework checkout each task works in, on its own branch from the current main (absolute path; for sglang the image's `/sgl-workspace/sglang` when not given, which the image installs sglang from) | required | required | required | required | the upstream scan reads it |
 | `model_path` | the model the baseline and the gates run | required | recommended: the reporter's model | — | required | — |
 | `workload` | the fixed benchmark, e.g. `{"isl": 8192, "osl": 1024, "conc": 64}` | when the task claims a gain | for a performance issue | — | required | — |
 | `goal` | what done means, measurable when the mode measures | recommended | — | — | recommended | — |
