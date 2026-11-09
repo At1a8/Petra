@@ -154,11 +154,11 @@ directory is not visible: `run_lock.py release --force` frees a lock whose run i
   the pushed branch is the one that was verified.
 - Human checkpoints: the intake's questions (`needs_input`); `stop_after` any phase; L3 tasks and designs the architect flags stop at Design
   (`awaiting_design_review`) and continue with `resume_from: "implement"`; the PR is prepared, never
-  pushed; issue replies are drafts. Posts go only to Petra's own repository, with a token for it alone,
-  and refuse anything that names the machine: a scan's daily report as the day's issue (`scripts/post_queue.py`),
-  which is also where the next scan, in any container, continues from; and the curator's knowledge
-  changes as a pull request to main (`scripts/propose_knowledge.py`), so knowledge a run proved reaches
-  later runs only once a human merged it.
+  pushed; issue replies are drafts; a scan's daily report is a file a human shares, checked to name
+  nothing about the machine (`scripts/daily_report.py`), and a shared copy is where the next scan, in
+  any container, continues from. The one post is the curator's knowledge changes, as a pull request to
+  main of Petra's own repository with a token for it alone (`scripts/propose_knowledge.py`), so
+  knowledge a run proved reaches later runs only once a human merged it.
 
 ## 6. Priorities and difficulty
 

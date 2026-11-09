@@ -19,7 +19,7 @@ Why it exists and how it maps onto the agreed design: [`docs/design.md`](docs/de
 | `issue` | an AMD user issue | Setup → Triage → Reproduce → Diagnose (skipped for an existing fix PR) → Implement → (Kernel) → Verify → (Performance) → Review → PR → Report | fix PR, or a conclusion (triaged, not reproduced, fixed on main, diagnosed); always a reply draft |
 | `ci` | a red AMD CI job or Failure Tracker cluster | Setup → Classify → Bisect → Implement → (Kernel) → Verify → Review → PR → Report | fix PR, or a handover for flaky/infrastructure failures |
 | `perf` | a system-level performance goal for a model and a fixed workload | Setup → Profile → Plan → Implement → (Kernel) → Verify → Performance → Review → PR → Report | PR with a measured win, or the change dropped; kernel-level items go to the kernel back end |
-| `scan` | none — the day's state of the framework: the AMD CI on main, open AMD user issues, upstream changes AMD needs to follow (platform gates and host-sync leads on request) | Collect → Dispatch → Report | the daily report, posted as the day's issue in Petra's repository, with the ranked tasks and the definition that starts each |
+| `scan` | none — the day's state of the framework: the AMD CI on main, open AMD user issues, upstream changes AMD needs to follow (platform gates and host-sync leads on request) | Collect → Dispatch → Report | the daily report, a file for you to share, with the ranked tasks and the definition that starts each |
 
 Phases in parentheses run only when they apply: Kernel when there is a kernel hand-off and
 `kernel_backend` is not `none`; Performance in issue mode for issues triaged as `performance`.
@@ -71,8 +71,9 @@ the roles:
   everything again;
 - the **curator** edits only Petra's own `knowledge/` and leaves the edits uncommitted for review;
 - no role pushes or posts upstream: the PR engineer returns the exact `git push`, issue replies are
-  drafts; the only posts go to Petra's own repository: a scan's daily report as an issue, and the
-  curator's knowledge changes as a pull request that a human merges.
+  drafts, a scan's daily report is a file for you to share; the one post is the curator's knowledge
+  changes, as a pull request to Petra's own repository that you merge, and only with a token you set
+  for that.
 
 | Role | Phases | What it does |
 |---|---|---|
@@ -148,19 +149,18 @@ every container loads it.
 - **GitHub token (strongly recommended).** Scans and issue runs read issues, pull requests and CI
   trackers through GitHub's API. Without a token GitHub allows 60 requests an hour and 10 searches a
   minute per IP address, shared with everyone behind the same address, so a scan crawls and can stop
-  partway; with one, 5000 requests an hour. Read-only is enough, since Petra never pushes or posts
-  upstream: on github.com, Settings → Developer settings → Personal access tokens → Fine-grained tokens,
-  with *Public repositories (read-only)* access (a classic token with no scopes also works).
-- **Petra repository token (optional).** Petra posts to its own repository, so developers see the
-  results on GitHub: a scan's daily report as the day's issue (a second scan that day updates it, the
-  next day's closes it), and the curator's knowledge changes as a pull request from a
-  `petra/knowledge/<run>` branch to main, which you review and merge. That takes a token for this
-  repository alone, so it can post nowhere else: a fine-grained token with *Only select
-  repositories* → `At1a8/Petra` and *Repository permissions* → *Issues*, *Contents* and *Pull
-  requests*: *Read and write*, added to `~/.petra_env` as `export PETRA_REPO_TOKEN=<token>`. Petra
-  pushes only `petra/` branches; protect main on GitHub (require a pull request) so the token cannot
-  change it either. Without the token the queue stays in the run directory, the knowledge changes stay
-  in the container's checkout, and the report gives the commands that post them.
+  partway; with one, 5000 requests an hour. Read-only is enough: on github.com, Settings → Developer
+  settings → Personal access tokens → Fine-grained tokens, with *Public repositories (read-only)*
+  access (a classic token with no scopes also works). Every agent in the container can read what
+  `~/.petra_env` holds, so keep your everyday token, the one you push with, out of it.
+- **Petra repository token (optional).** Only for the curator's knowledge changes: as a pull request
+  from a `petra/knowledge/<run>` branch to main, which you review and merge. That takes a token for
+  this repository alone, so it can write nowhere else: a fine-grained token with *Only select
+  repositories* → `At1a8/Petra` and *Repository permissions* → *Contents* and *Pull requests*: *Read
+  and write*, added to `~/.petra_env` as `export PETRA_REPO_TOKEN=<token>`. Petra pushes only
+  `petra/` branches; protect main on GitHub (require a pull request) so the token cannot change it
+  either. Without it the knowledge changes stay in the container's checkout, and the report gives the
+  command that proposes them.
 
 ### 2. Start a container (host)
 
@@ -257,8 +257,8 @@ The scan changes no code. It writes the day's report on the framework since the 
 last 7 days): the AMD CI on main (every failing job, since when it fails and what its log says), the
 open AMD user issues under P0, P1 and P2, and the upstream changes AMD needs to follow. It ranks the
 tasks in them into `exp/scan_<time>/task_queue.md`, each with the task definition that starts it, and
-posts the report, without anything about this machine, as the day's issue in Petra's repository. One
-report a day is enough: when one is less than 24 hours old, the scan asks before it starts again
+writes the report, without anything about this machine, to `exp/scan_<time>/daily_report.md` for you
+to share; Petra posts it nowhere. One report a day is enough: when one is less than 24 hours old, the scan asks before it starts again
 (answer `rescan`), and `upstream_repos` adds repositories to follow, such as vLLM. To take one task,
 stopping after the reproduction to confirm the environment, name its fields:
 
@@ -294,7 +294,12 @@ the container with its status. A run directory holds:
 | `logs/` | one log per server or benchmark launch, `<tag>_<time>.log` |
 | `pr_body.md`, `patches/` | the PR description and the branch's commits as patches |
 | `knowledge_pr.md` | the description of the curator's pull request to Petra's repository |
-| `task_queue.md`, `daily_report.md` | a scan's ranked tasks, each with the definition that starts it, next to what each source found (`<source>.json`); the daily report as posted, with nothing about this machine |
+| `daily_report.md`, `task_queue.md` | a scan's daily report, for you to share (below); the ranked tasks with local detail, each with the definition that starts it, next to what each source found (`<source>.json`) |
+
+A scan's `daily_report.md` is written to be shared, and `scripts/daily_report.py check` has made sure
+it names nothing about this machine: open a new issue in Petra's repository on GitHub, title it
+`Petra daily report <date>` and paste the whole file. Its first line, a hidden marker, lets the next
+scan, in any container, find it there and mark what changed since.
 
 Petra never pushes. The task's branch, `petra/<slug>`, is in `/sgl-workspace/sglang`, and the report
 gives the exact `git -C /sgl-workspace/sglang push ...`: run it here with credentials that can push.
@@ -328,7 +333,7 @@ step 3 the GEAK way, cloning Petra to `/workspace/Petra` (pip shows the output o
 | `PETRA_REPO_URL`, `PETRA_REF` | bootstrap | `https://github.com/At1a8/Petra.git`, its default branch |
 | `CLAUDE_VERSION`, `CLAUDE_BIN_DIR` | bootstrap | `latest`, `~/.local/bin` |
 | `CLAUDE_CONFIG_DIR` | bootstrap, Claude Code | your `~/.petra/claude` on the host, for root in the container; when already set, used as it is |
-| `PETRA_REPO_TOKEN` | `~/.petra_env`, `scripts/post_queue.py`, `scripts/propose_knowledge.py` | unset; a fine-grained token for Petra's own repository (Issues, Contents, Pull requests: read and write), with which a scan posts the day's report and the curator opens its pull request |
+| `PETRA_REPO_TOKEN` | `~/.petra_env`, `scripts/propose_knowledge.py` | unset; a fine-grained token for Petra's own repository alone (Contents, Pull requests: read and write), with which the curator opens its pull request |
 | `LLM_GATEWAY_KEY` | `~/.petra_env`, the container's shell settings | unset; set, Claude Code runs on the AMD LLM gateway unless `ANTHROPIC_BASE_URL` names another |
 | `PETRA_FRAMEWORK_DIR`, `PETRA_FRAMEWORK_REPO` | bootstrap: `--framework-dir`, `--framework-repo` | the image's `/sgl-workspace/sglang`; sglang |
 | `PETRA_SKIP_BOOTSTRAP` | bootstrap | unset; set it to install the package with no side effects (CI, images) |
@@ -421,9 +426,10 @@ its owner (in `/workspace` there is nothing to give back); every agent runs it a
 checkout: skills it names that are gone, and new ones it does not name yet (the scout runs it on every
 scan). `scripts/latest_image.py [--variant rocm10-mi30x]` prints the newest daily sglang image
 (`run_docker.sh` starts from it; the director compares a run's image with it). `scripts/run_lock.py`
-keeps one Petra task per machine (`acquire`, `release`, `status`). `scripts/post_queue.py` posts a
-scan's daily report as the day's issue in Petra's own repository and refuses a body that names this machine
-or a local path; `--latest` prints the newest one, which the next scan continues from.
+keeps one Petra task per machine (`acquire`, `release`, `status`). `scripts/daily_report.py check`
+tells whether a daily report can be made public (no local path, hostname or internal site) and fits in
+an issue; `latest` finds the newest report shared in Petra's repository, which the next scan, in any
+container, continues from. Both only read.
 `scripts/propose_knowledge.py` turns the curator's changes under `knowledge/` into a pull request
 from `petra/knowledge/<run>` to main, built on the current main in a throwaway worktree, and then
 restores `knowledge/` in the checkout, so later runs read only merged knowledge.

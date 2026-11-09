@@ -20,7 +20,7 @@ import audit_host_syncs  # noqa: E402
 import audit_platform_gates  # noqa: E402
 import check_framework_skills  # noqa: E402
 import latest_image  # noqa: E402
-import post_queue  # noqa: E402
+import daily_report  # noqa: E402
 import propose_knowledge  # noqa: E402
 import run_lock  # noqa: E402
 import scan_ci  # noqa: E402
@@ -80,70 +80,51 @@ class LatestImageTest(unittest.TestCase):
                          ("20261103", (0, 5, 22)))
 
 
-class PostQueueTest(unittest.TestCase):
-    """The daily queue issue in Petra's own repository; the GitHub API is faked."""
+class DailyReportTest(unittest.TestCase):
+    """The scan's daily report: checked before a human shares it, found again once shared. Read only."""
 
-    def queue(self, number, date, state="open"):
-        return {"number": number, "title": post_queue.title(date), "state": state, "created_at": date + "T01:00:00Z",
-                "updated_at": date + "T02:00:00Z", "html_url": "https://github.com/At1a8/Petra/issues/%d" % number,
-                "body": "q\n" + post_queue.MARKER}
+    def issue(self, number, date, created="T01:00:00Z", marker=True):
+        return {"number": number, "title": daily_report.title(date), "state": "open", "created_at": date + created,
+                "html_url": "https://github.com/At1a8/Petra/issues/%d" % number,
+                "body": ("q\n" + daily_report.MARKER) if marker else "unrelated"}
 
     def test_repo_from_url(self):
         for url in ("https://github.com/At1a8/Petra.git", "git@github.com:At1a8/Petra.git", "https://github.com/At1a8/Petra"):
-            self.assertEqual(post_queue.repo_from_url(url), "At1a8/Petra")
-        self.assertEqual(post_queue.repo_from_url("https://gitlab.com/a/b.git"), "")
+            self.assertEqual(daily_report.repo_from_url(url), "At1a8/Petra")
+        self.assertEqual(daily_report.repo_from_url("https://gitlab.com/a/b.git"), "")
 
-    def test_a_private_detail_stops_the_post(self):
+    def test_a_private_detail_stops_the_report(self):
         body = "| 1 | fix X | see rocm.docs.amd.com |\nlocal models `/data/models/some-model`\nhost gpu-node-7\nsee confluence"
-        self.assertEqual([l.split(":")[0] for l in post_queue.leaks(body, "gpu-node-7")], ["2", "3", "4"])
-        self.assertEqual(post_queue.leaks("| 1 | GLM crashes with --dcp-size 8 | #41299 |", "gpu-node-7"), [])
+        self.assertEqual([l.split(":")[0] for l in daily_report.leaks(body, "gpu-node-7")], ["2", "3", "4"])
+        self.assertEqual(daily_report.leaks("| 1 | GLM crashes with --dcp-size 8 | #41299 |", "gpu-node-7"), [])
 
-    def test_one_issue_a_day(self):
-        old, today = self.queue(3, "2026-11-05"), self.queue(5, "2026-11-06")
-        self.assertEqual(post_queue.plan([old, today], "2026-11-06"), {"action": "update", "number": 5, "close": [3]})
-        self.assertEqual(post_queue.plan([old], "2026-11-07"), {"action": "create", "number": None, "close": [3]})
-
-    def test_post_creates_and_supersedes(self):
-        calls = []
-
-        def fake(method, path, token="", data=None):
-            calls.append((method, path, data))
-            if method == "GET":
-                return [self.queue(3, "2026-11-05"), {"number": 4, "title": "a PR", "pull_request": {}, "body": post_queue.MARKER},
-                        {"number": 2, "title": "a bug", "body": "unrelated"}]
-            return {"number": 7, "html_url": "https://github.com/At1a8/Petra/issues/7"}
-
-        with mock.patch.object(post_queue, "api", side_effect=fake):
-            out = post_queue.post("At1a8/Petra", "| 1 | task |", "2026-11-06", "t")
-        self.assertEqual((out["action"], out["number"], out["closed"]), ("created", 7, [3]))
-        self.assertEqual([(m, p) for m, p, _ in calls[1:]], [("POST", "/repos/At1a8/Petra/issues"),
-                                                           ("POST", "/repos/At1a8/Petra/issues/3/comments"),
-                                                           ("PATCH", "/repos/At1a8/Petra/issues/3")])
-        self.assertEqual(calls[1][2]["title"], "Petra daily report 2026-11-06")
-        self.assertTrue(calls[1][2]["body"].endswith(post_queue.MARKER + "\n"))
-
-    def test_nothing_is_posted_without_the_token_or_with_a_leak(self):
+    def test_check_exit_codes(self):
+        template = Path(__file__).resolve().parent.parent / "templates" / "daily_report.md"
         with tempfile.TemporaryDirectory() as d:
-            clean, leaky = Path(d) / "clean.md", Path(d) / "leaky.md"
-            clean.write_text("| 1 | task |\n")
-            leaky.write_text("weights in /data/models/x\n")
-            env = {k: v for k, v in os.environ.items() if k != "PETRA_REPO_TOKEN"}
-            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(post_queue, "api") as api, \
-                    redirect_stderr(io.StringIO()):
-                self.assertEqual(post_queue.main(["--body", str(clean), "--repo", "At1a8/Petra"]), 2)
-                self.assertEqual(post_queue.main(["--body", str(leaky), "--repo", "At1a8/Petra"]), 3)
-            api.assert_not_called()
+            leaky, long = Path(d) / "leaky.md", Path(d) / "long.md"
+            leaky.write_text(daily_report.MARKER + "\nweights in /data/models/x\n")
+            long.write_text(daily_report.MARKER + "\n" + "x" * (daily_report.ISSUE_LIMIT + 1))
+            with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+                self.assertEqual(daily_report.main(["check", str(template)]), 0, "the template itself is public-safe")
+                self.assertEqual(daily_report.main(["check", str(leaky)]), 3)
+                self.assertEqual(daily_report.main(["check", str(long)]), 4)
+            self.assertIn('"marker": true', out.getvalue())
 
-    def test_latest(self):
-        items = [{"number": 9, "title": "a bug", "body": ""}, self.queue(8, "2026-11-06"), self.queue(6, "2026-11-05", "closed")]
-        with mock.patch.object(post_queue, "api", return_value=items):
-            got = post_queue.latest("At1a8/Petra")
-        self.assertEqual((got["date"], got["number"], got["state"], got["updated_at"]), ("2026-11-06", 8, "open", "2026-11-06T02:00:00Z"))
+    def test_latest_finds_the_newest_shared_report(self):
+        items = [self.issue(9, "2026-11-07", marker=False), {"number": 4, "title": "a PR", "pull_request": {}, "body": daily_report.MARKER},
+                 self.issue(8, "2026-11-06"), self.issue(6, "2026-11-05")]
+        with mock.patch.object(daily_report, "get", return_value=items):
+            got = daily_report.latest("At1a8/Petra")
+        self.assertEqual((got["date"], got["number"], got["created_at"]), ("2026-11-06", 8, "2026-11-06T01:00:00Z"))
         self.assertIsInstance(got["age_hours"], float)
-        now = post_queue.dt.datetime(2026, 11, 7, 1, 30, tzinfo=post_queue.dt.timezone.utc)
-        self.assertEqual(post_queue.age_hours("2026-11-06T02:00:00Z", now), 23.5)
-        with mock.patch.object(post_queue, "api", return_value=[]):
-            self.assertEqual(post_queue.latest("At1a8/Petra"), {})
+        now = daily_report.dt.datetime(2026, 11, 7, 0, 30, tzinfo=daily_report.dt.timezone.utc)
+        self.assertEqual(daily_report.age_hours("2026-11-06T01:00:00Z", now), 23.5)
+        with mock.patch.object(daily_report, "get", return_value=[]):
+            self.assertEqual(daily_report.latest("At1a8/Petra"), {})
+
+    def test_it_never_writes(self):
+        src = (Path(__file__).resolve().parent.parent / "scripts" / "daily_report.py").read_text()
+        self.assertNotRegex(src, r"method=|\"POST\"|\"PATCH\"|\"PUT\"|\"DELETE\"")
 
 
 def git(*args, cwd=None):

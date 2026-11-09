@@ -26,15 +26,18 @@ Input: `candidates_path`.
    top entries, include the task definition that starts it (`templates/task_definition.md`) with every
    field its mode requires that the scan can establish; leave out what it cannot (a model that is not
    on this machine, the workload of a performance task), and the run asks for it.
-6. Write `RUN_DIR/daily_report.md` (`templates/daily_report.md`), the day's report on the framework,
-   which the director posts as an issue in Petra's own repository: (1) the AMD CI on main, every
-   failing job with since when it fails, when it last passed, its failed tests or first error and its
-   class; (2) every open AMD user issue under P0, P1 or P2; (3) the upstream changes AMD needs to
-   follow, per repository; (4) the suggested tasks with the definitions that start them. Mark what
-   the previous report did not have as *new*. The repository is public, so nothing about this machine
-   or its owner: no hostnames, no local paths (`/data`, `/mnt`, `/home`, `/workspace`,
-   `/sgl-workspace`, ...), weights only as `model_path=<weights>`, no internal sites or names.
-   `scripts/post_queue.py` refuses a body that names a local path or this machine.
+6. Write `RUN_DIR/daily_report.md` from `templates/daily_report.md`: the day's report on the framework,
+   which a human shares, e.g. as an issue in Petra's repository. Keep its order: the summary, (1) the
+   AMD CI on main, every failing job with since when it fails, when it last passed, its failed tests or
+   first error and its class; (2) every open AMD user issue under P0, P1 or P2; (3) the upstream
+   changes AMD needs to follow, per repository; (4) the top 10 tasks, their definitions folded in
+   `<details>`. Against `RUN_DIR/previous_report.md`, mark what is *new* and list what was resolved or
+   closed since. It is written to be made public: nothing about this machine or its owner, no
+   hostnames, no local paths (`/data`, `/mnt`, `/home`, `/workspace`, `/sgl-workspace`, ...), weights
+   only as `model_path=<weights>`, no internal sites or names; that and the local detail stay in
+   `task_queue.md`. Aim for about 40,000 characters (an issue holds 65,536): cap the long tables and
+   count the rest. `python3 <petra_dir>/scripts/daily_report.py check RUN_DIR/daily_report.md` must pass
+   (exit 3: remove the lines it lists; exit 4: shorten).
 
 Return:
 
