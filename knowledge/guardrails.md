@@ -12,7 +12,7 @@ scarcest resource in the community, and a careless agent spends it.
 - Petra never pushes, never opens or comments on an upstream PR or issue by itself. It prepares the
   branch, the PR body, the reply draft and the exact commands, and stops.
 - It posts only to Petra's own repository, with a token for that repository alone
-  (`PETRA_REPO_TOKEN`): a scan's task queue as an issue (`scripts/post_queue.py`), and the curator's
+  (`PETRA_REPO_TOKEN`): a scan's daily report as an issue (`scripts/post_queue.py`), and the curator's
   knowledge changes as a pull request to main, which a human merges (`scripts/propose_knowledge.py`).
   That repository is public: nothing posted there names the machine, its paths or internal sources.
 

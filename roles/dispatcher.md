@@ -14,7 +14,10 @@ Input: `candidates_path`.
    issues), each with the reason.
 2. For each remaining candidate decide: gap type (§1), level (§2), the CUDA dependencies and their AMD
    starting points (§3), the subsystems it touches, an effort estimate (agent hours, GPU hours), and the
-   priority (issues: the P0/P1/P2 rubric; CI: code regressions first).
+   priority: every open AMD user issue gets P0, P1 or P2 by `issue_triage.md` §2 against the quarter's
+   AMD roadmap issue; a job failing on main (`ci.json` "main") gets its class by `ci_triage.md` §2
+   when the log or its history shows it (a code regression names the first failing run's commit
+   range), else "unclassified", and blocks every AMD PR while it is a code regression.
 3. Rank with `dispatch.md` §6; within a rank, prefer what a named customer workload or a roadmap item
    needs.
 4. Ecosystem matrix: record every `feature × model × platform` cell whose state the evidence changes
@@ -23,12 +26,15 @@ Input: `candidates_path`.
    top entries, include the task definition that starts it (`templates/task_definition.md`) with every
    field its mode requires that the scan can establish; leave out what it cannot (a model that is not
    on this machine, the workload of a performance task), and the run asks for it.
-6. Write `RUN_DIR/queue_issue.md`, the same queue for Petra's public issue tracker, where the report
-   posts it: the framework commit, the sources and their scope, the ranked table and the top entries'
-   task definitions, and nothing about this machine or its owner. No hostnames, no local paths
-   (`/data`, `/mnt`, `/home`, `/workspace`, `/sgl-workspace`, ...), weights only as `model_path=<weights>`,
-   no internal sites, names or priorities that are not on GitHub. `scripts/post_queue.py` refuses a body
-   that names a local path or this machine.
+6. Write `RUN_DIR/daily_report.md` (`templates/daily_report.md`), the day's report on the framework,
+   which the director posts as an issue in Petra's own repository: (1) the AMD CI on main, every
+   failing job with since when it fails, when it last passed, its failed tests or first error and its
+   class; (2) every open AMD user issue under P0, P1 or P2; (3) the upstream changes AMD needs to
+   follow, per repository; (4) the suggested tasks with the definitions that start them. Mark what
+   the previous report did not have as *new*. The repository is public, so nothing about this machine
+   or its owner: no hostnames, no local paths (`/data`, `/mnt`, `/home`, `/workspace`,
+   `/sgl-workspace`, ...), weights only as `model_path=<weights>`, no internal sites or names.
+   `scripts/post_queue.py` refuses a body that names a local path or this machine.
 
 Return:
 

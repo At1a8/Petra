@@ -7,13 +7,20 @@ Read: `knowledge/dispatch.md`, `knowledge/issue_triage.md` §1, `knowledge/ci_tr
 
 ## PHASE=collect (scan)
 
-Inputs: `sources` (any of `upstream`, `issues`, `ci`, `hardware`, `perf`), `since` (date or commit;
-default: the previous queue's date, else 7 days), `framework_dir`.
+Inputs: `sources` (any of `ci`, `issues`, `upstream`, which the daily report covers, and `hardware`,
+`perf` on request), `since` (date or commit; default: the previous report's date, else 7 days),
+`framework_dir`, `upstream_repos` (more repositories to follow upstream, e.g.
+`[{"name": "vllm", "url": "https://github.com/vllm-project/vllm"}]`), `rescan`.
 
-The previous queue is the newest scan under `exp_root`, else the newest task-queue issue in Petra's own
-repository, which every container sees: `python3 <petra_dir>/scripts/post_queue.py --latest` prints its
-date, URL and body (`{}` when there is none).
+The previous report is the newest scan under `exp_root`, else the newest daily-report issue in Petra's
+own repository, which every container sees: `python3 <petra_dir>/scripts/post_queue.py --latest` prints
+its date, URL, `age_hours` and body (`{}` when there is none).
 
+0. **One report a day.** Unless `rescan` is true: when the newest scan under `exp_root` started less
+   than 24 hours ago (its directory name is its UTC start), or the newest daily-report issue is younger
+   than 24 hours (`age_hours`), create nothing and return `lock: "skipped"`, `run_dir: ""`,
+   `candidates_path: ""` and `recent` with its time (UTC), URL and run directory. The run then asks
+   the user whether to scan again.
 1. Choose `RUN_DIR=<exp_root>/scan_<time>`, `<time>` from `date -u +%Y%m%d-%H%M%SZ` (UTC), and take the
    machine first — one Petra task per machine: `python3 <petra_dir>/scripts/run_lock.py acquire
    --run-dir RUN_DIR --mode scan --task scan --idle-hours <lock_idle_hours>`. Exit 1 means another
@@ -27,10 +34,15 @@ date, URL and body (`{}` when there is none).
    `ref` that names a file and line gives its path in the repository and the commit
    (`<path>:<line>@<sha>`).
 3. Per source, run the script and keep its JSON under `RUN_DIR`:
-   - `upstream`: `python3 <petra_dir>/scripts/scan_upstream.py --repo-dir <main> --since <since> --out RUN_DIR/upstream.json`
-     — merged PRs, CUDA-first features and new CUDA-only gates.
+   - `ci`: `python3 <petra_dir>/scripts/scan_ci.py --out RUN_DIR/ci.json --md RUN_DIR/ci.md` — the AMD CI
+     on main from its own runs and their logs (each failing job, since when, last passed, failed tests,
+     first errors), and the Failure Trackers, which can be days behind main.
    - `issues`: `python3 <petra_dir>/scripts/scan_issues.py --out RUN_DIR/issues.json`.
-   - `ci`: `python3 <petra_dir>/scripts/scan_ci.py --out RUN_DIR/ci.json`.
+   - `upstream`: `python3 <petra_dir>/scripts/scan_upstream.py --repo-dir <main> --since <since> --out RUN_DIR/upstream.json`
+     — merged PRs, CUDA-first features and new CUDA-only gates. For each of `upstream_repos`, keep a
+     blobless clone at `/workspace/upstream/<name>` (`git clone --filter=blob:none <url>` when missing,
+     else `git fetch origin`), check out `origin/HEAD` detached, and write `RUN_DIR/upstream_<name>.json`
+     the same way.
    - `hardware`: `python3 <petra_dir>/scripts/audit_platform_gates.py <main>/python --out RUN_DIR/gates.json`
      — gates a new architecture (e.g. gfx1250) must be re-checked against.
    - `perf`: `python3 <petra_dir>/scripts/audit_host_syncs.py <attention backends and model runner under <main>> --out RUN_DIR/syncs.json`
@@ -46,6 +58,7 @@ date, URL and body (`{}` when there is none).
 Return:
 
 ```json
-{"lock": "acquired | busy", "run_dir": "/abs/RUN_DIR", "candidates_path": "/abs/RUN_DIR/candidates.json",
- "counts": {"upstream": 0, "issues": 0, "ci": 0, "hardware": 0, "perf": 0}}
+{"lock": "acquired | busy | skipped", "run_dir": "/abs/RUN_DIR", "candidates_path": "/abs/RUN_DIR/candidates.json",
+ "counts": {"ci": 0, "issues": 0, "upstream": 0, "hardware": 0, "perf": 0},
+ "recent": {"at": "<UTC time of the recent report>", "url": "<its issue, or empty>", "run_dir": "<or empty>"}}
 ```

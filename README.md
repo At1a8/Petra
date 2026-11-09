@@ -19,7 +19,7 @@ Why it exists and how it maps onto the agreed design: [`docs/design.md`](docs/de
 | `issue` | an AMD user issue | Setup → Triage → Reproduce → Diagnose (skipped for an existing fix PR) → Implement → (Kernel) → Verify → (Performance) → Review → PR → Report | fix PR, or a conclusion (triaged, not reproduced, fixed on main, diagnosed); always a reply draft |
 | `ci` | a red AMD CI job or Failure Tracker cluster | Setup → Classify → Bisect → Implement → (Kernel) → Verify → Review → PR → Report | fix PR, or a handover for flaky/infrastructure failures |
 | `perf` | a system-level performance goal for a model and a fixed workload | Setup → Profile → Plan → Implement → (Kernel) → Verify → Performance → Review → PR → Report | PR with a measured win, or the change dropped; kernel-level items go to the kernel back end |
-| `scan` | none — collect tasks from upstream commits, AMD issues, CI failures and platform gates (host-sync leads on request) | Collect → Dispatch → Report | a ranked task queue with the task definition that starts each task |
+| `scan` | none — the day's state of the framework: the AMD CI on main, open AMD user issues, upstream changes AMD needs to follow (platform gates and host-sync leads on request) | Collect → Dispatch → Report | the daily report, posted as the day's issue in Petra's repository, with the ranked tasks and the definition that starts each |
 
 Phases in parentheses run only when they apply: Kernel when there is a kernel hand-off and
 `kernel_backend` is not `none`; Performance in issue mode for issues triaged as `performance`.
@@ -71,7 +71,7 @@ the roles:
   everything again;
 - the **curator** edits only Petra's own `knowledge/` and leaves the edits uncommitted for review;
 - no role pushes or posts upstream: the PR engineer returns the exact `git push`, issue replies are
-  drafts; the only posts go to Petra's own repository: a scan's task queue as an issue, and the
+  drafts; the only posts go to Petra's own repository: a scan's daily report as an issue, and the
   curator's knowledge changes as a pull request that a human merges.
 
 | Role | Phases | What it does |
@@ -152,7 +152,7 @@ every container loads it.
   upstream: on github.com, Settings → Developer settings → Personal access tokens → Fine-grained tokens,
   with *Public repositories (read-only)* access (a classic token with no scopes also works).
 - **Petra repository token (optional).** Petra posts to its own repository, so developers see the
-  results on GitHub: a scan's task queue as the day's issue (a second scan that day updates it, the
+  results on GitHub: a scan's daily report as the day's issue (a second scan that day updates it, the
   next day's closes it), and the curator's knowledge changes as a pull request from a
   `petra/knowledge/<run>` branch to main, which you review and merge. That takes a token for this
   repository alone, so it can post nowhere else: a fine-grained token with *Only select
@@ -253,10 +253,13 @@ in the input box above it:
 use /workspace/Petra/petra.js with mode=scan, petra_dir=/workspace/Petra
 ```
 
-The scan changes no code. It collects open AMD issues, red AMD CI, CUDA-first upstream changes and
-hardware gaps since the last scan (else the last 7 days), ranks them, and writes
-`exp/scan_<time>/task_queue.md` with the task definition that starts each task, and posts the same queue,
-without anything about this machine, as the day's issue in Petra's repository. To take one task,
+The scan changes no code. It writes the day's report on the framework since the last report (else the
+last 7 days): the AMD CI on main (every failing job, since when it fails and what its log says), the
+open AMD user issues under P0, P1 and P2, and the upstream changes AMD needs to follow. It ranks the
+tasks in them into `exp/scan_<time>/task_queue.md`, each with the task definition that starts it, and
+posts the report, without anything about this machine, as the day's issue in Petra's repository. One
+report a day is enough: when one is less than 24 hours old, the scan asks before it starts again
+(answer `rescan`), and `upstream_repos` adds repositories to follow, such as vLLM. To take one task,
 stopping after the reproduction to confirm the environment, name its fields:
 
 ```
@@ -291,7 +294,7 @@ the container with its status. A run directory holds:
 | `logs/` | one log per server or benchmark launch, `<tag>_<time>.log` |
 | `pr_body.md`, `patches/` | the PR description and the branch's commits as patches |
 | `knowledge_pr.md` | the description of the curator's pull request to Petra's repository |
-| `task_queue.md`, `queue_issue.md` | a scan's ranked tasks, each with the definition that starts it, next to what each source found (`<source>.json`); the second is the same queue as posted, with nothing about this machine |
+| `task_queue.md`, `daily_report.md` | a scan's ranked tasks, each with the definition that starts it, next to what each source found (`<source>.json`); the daily report as posted, with nothing about this machine |
 
 Petra never pushes. The task's branch, `petra/<slug>`, is in `/sgl-workspace/sglang`, and the report
 gives the exact `git -C /sgl-workspace/sglang push ...`: run it here with credentials that can push.
@@ -325,7 +328,7 @@ step 3 the GEAK way, cloning Petra to `/workspace/Petra` (pip shows the output o
 | `PETRA_REPO_URL`, `PETRA_REF` | bootstrap | `https://github.com/At1a8/Petra.git`, its default branch |
 | `CLAUDE_VERSION`, `CLAUDE_BIN_DIR` | bootstrap | `latest`, `~/.local/bin` |
 | `CLAUDE_CONFIG_DIR` | bootstrap, Claude Code | your `~/.petra/claude` on the host, for root in the container; when already set, used as it is |
-| `PETRA_REPO_TOKEN` | `~/.petra_env`, `scripts/post_queue.py`, `scripts/propose_knowledge.py` | unset; a fine-grained token for Petra's own repository (Issues, Contents, Pull requests: read and write), with which a scan posts the day's queue and the curator opens its pull request |
+| `PETRA_REPO_TOKEN` | `~/.petra_env`, `scripts/post_queue.py`, `scripts/propose_knowledge.py` | unset; a fine-grained token for Petra's own repository (Issues, Contents, Pull requests: read and write), with which a scan posts the day's report and the curator opens its pull request |
 | `LLM_GATEWAY_KEY` | `~/.petra_env`, the container's shell settings | unset; set, Claude Code runs on the AMD LLM gateway unless `ANTHROPIC_BASE_URL` names another |
 | `PETRA_FRAMEWORK_DIR`, `PETRA_FRAMEWORK_REPO` | bootstrap: `--framework-dir`, `--framework-repo` | the image's `/sgl-workspace/sglang`; sglang |
 | `PETRA_SKIP_BOOTSTRAP` | bootstrap | unset; set it to install the package with no side effects (CI, images) |
@@ -362,7 +365,8 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `kernel_backend_command` | `command` back end: shell command with `{task_dir}`, `{out_dir}`, `{gpu_ids}` |
 | `kernel_budget` | optimization rounds for the kernel back end (default 6) |
 | `apply_prs` | `perf`: candidate PRs to apply and A/B |
-| `sources`, `since` | `scan`: any of `upstream`, `issues`, `ci`, `hardware`, `perf`; the start of the window |
+| `sources`, `since` | `scan`: any of `ci`, `issues`, `upstream` (the default) and `hardware`, `perf`; the start of the window (default: the previous report) |
+| `rescan`, `upstream_repos` | `scan`: `true` scans again although a report from the last 24 hours exists; more repositories to follow upstream, as `[{"name": "vllm", "url": "https://github.com/vllm-project/vllm"}]` |
 | `stop_after` | stop after the named phase of the mode (e.g. `Design`, `Reproduce`); a phase the mode does not run comes back as a question |
 | `resume_from`, `run_dir` | `feature`: `implement` continues a run that stopped at Design once a human approved `design.md` |
 | `review_model` | the reviewer's model, passed with its agent call (GEAK's runtime takes a model per call; elsewhere it depends on the runtime) |
@@ -406,7 +410,7 @@ GitHub allows 60 requests an hour and 10 searches a minute per IP address).
 | Script | Source of tasks |
 |---|---|
 | `scripts/scan_issues.py` | open AMD issues with linked PRs, replies and the projected 60-day auto-close date |
-| `scripts/scan_ci.py` | Failure Tracker state → failure clusters with statuses and since dates |
+| `scripts/scan_ci.py` | the AMD CI on main from its own runs and logs (each failing job: since when, last passed, failed tests, first errors), and the Failure Trackers' clusters |
 | `scripts/scan_upstream.py` | merged upstream commits: new CUDA gates, CUDA-first features, new models |
 | `scripts/audit_platform_gates.py` | platform gates to re-check on a new architecture (capability checks true on gfx1250, wave32 assumptions) |
 | `scripts/audit_host_syncs.py` | host-device sync and copy candidates on the hot path (leads for a profile) |
@@ -418,7 +422,7 @@ checkout: skills it names that are gone, and new ones it does not name yet (the 
 scan). `scripts/latest_image.py [--variant rocm10-mi30x]` prints the newest daily sglang image
 (`run_docker.sh` starts from it; the director compares a run's image with it). `scripts/run_lock.py`
 keeps one Petra task per machine (`acquire`, `release`, `status`). `scripts/post_queue.py` posts a
-scan's queue as the day's issue in Petra's own repository and refuses a body that names this machine
+scan's daily report as the day's issue in Petra's own repository and refuses a body that names this machine
 or a local path; `--latest` prints the newest one, which the next scan continues from.
 `scripts/propose_knowledge.py` turns the curator's changes under `knowledge/` into a pull request
 from `petra/knowledge/<run>` to main, built on the current main in a throwaway worktree, and then

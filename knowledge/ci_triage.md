@@ -6,6 +6,12 @@ fix PR or a handover within a week for anything else.
 
 ## 1. Sources
 
+- **The AMD CI on main**, read from its own runs: the scheduled `PR Test (AMD)`, `Nightly Test (AMD)` and
+  `Nightly Test (AMD MI355X Disagg)` workflows on main, not pull requests or forks. For each job failing
+  in the latest run: its failed steps, since which run it fails, when it last passed and, from its log
+  (a token is needed), the failed tests and the first errors (`scripts/scan_ci.py`). This is what main
+  shows now; the trackers below can be days behind it. Jobs that only collect the others' results
+  (`*-finish`, `check-all-jobs`) are left out.
 - **AMD Failure Tracker** issues on sglang, titled `[Failure Tracker] PR Test (AMD)` (label
   `ci-failure-tracker`). A bot rewrites the body; the machine-readable state sits in an HTML comment
   `<!-- ci-failure-tracker-state: {...} -->`. Entries are keyed by `test_file::test_function` with

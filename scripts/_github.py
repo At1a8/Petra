@@ -56,6 +56,26 @@ def request(url: str, retries: int = 6) -> object:
     raise RuntimeError(f"unreachable: {url}")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def text(path: str) -> str:
+    """A plain-text resource, e.g. a job log (needs a token). GitHub answers with a redirect to signed
+    storage, which is fetched without the token: it must not leave api.github.com."""
+    req = urllib.request.Request(API + path, headers={"User-Agent": "petra-scan",
+                                                      **({"Authorization": f"Bearer {_token()}"} if _token() else {})})
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(req, timeout=40) as resp:
+            return resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        if e.code not in (301, 302, 307) or not e.headers.get("Location"):
+            raise
+        with urllib.request.urlopen(e.headers["Location"], timeout=120) as resp:
+            return resp.read().decode("utf-8", "replace")
+
+
 def get(path: str, params: dict | None = None) -> object:
     url = API + path
     if params:
