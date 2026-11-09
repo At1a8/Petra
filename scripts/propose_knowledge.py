@@ -10,7 +10,7 @@ the pull request targets main and a human merges it. Once it is open, those file
 checkout, so later runs read knowledge/ as merged, not as proposed; a re-run updates the same branch
 and pull request. It pushes with PETRA_REPO_TOKEN, a fine-grained token for this repository alone
 (Contents, Pull requests: read and write). The repository is public: added lines or a body that name a
-local path, this machine or an internal site stop it, as in scripts/post_queue.py. Without the token,
+local path, this machine or an internal site stop it, as in scripts/daily_report.py. Without the token,
 or on any failure, the changes stay where they are. Standard library and git only.
 """
 from __future__ import annotations
@@ -25,13 +25,23 @@ import subprocess
 import sys
 import tempfile
 import urllib.error
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from post_queue import api, default_repo, leaks  # noqa: E402
+from daily_report import default_repo, leaks  # noqa: E402
 
 PETRA = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MARKER = "<!-- petra:knowledge -->"
 AUTHOR = ["-c", "user.name=Petra curator", "-c", "user.email=petra-curator@users.noreply.github.com"]
+
+
+def api(method: str, path: str, token: str, data: dict | None = None):
+    req = urllib.request.Request("https://api.github.com" + path, method=method,
+                                 data=json.dumps(data).encode() if data else None,
+                                 headers={"Accept": "application/vnd.github+json", "User-Agent": "petra-curator",
+                                          "Authorization": "Bearer " + token})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
 
 
 def git(repo: str, *args, check: bool = True, env: dict | None = None) -> str:
@@ -160,9 +170,16 @@ def main(argv=None) -> int:
         restore(a.petra_dir, tracked, untracked)
         print(json.dumps({**pr, "branch": branch, "commit": sha, "files": files}, indent=1))
         return 0
+    except urllib.error.HTTPError as e:
+        print("propose_knowledge: HTTP %d from GitHub%s; the changes stay where they are" % (
+            e.code, " (PETRA_REPO_TOKEN cannot write to the repository; README step 1)" if e.code in (401, 403) else ""),
+            file=sys.stderr)
+        return 2 if e.code in (401, 403) else 1
     except RuntimeError as e:
-        print("propose_knowledge: %s; the changes stay where they are" % e, file=sys.stderr)
-        return 4 if "apply" in str(e) else 1
+        denied = any(k in str(e) for k in ("403", "401", "Authentication failed", "Permission to"))
+        print("propose_knowledge: %s; the changes stay where they are%s" % (
+            e, " (PETRA_REPO_TOKEN cannot push; README step 1)" if denied else ""), file=sys.stderr)
+        return 4 if "apply" in str(e) else 2 if denied else 1
     except (urllib.error.URLError, OSError, ValueError) as e:
         print("propose_knowledge: %s; the changes stay where they are" % e, file=sys.stderr)
         return 1

@@ -631,9 +631,8 @@ def check_environment(env=None, keys_path: str = "") -> dict:
          "no GITHUB_TOKEN: GitHub then allows 60 requests an hour and 10 searches a minute per IP, so scans "
          "crawl and can stop partway; add a read-only token to ~/.petra_env (README step 1)"),
         ("repo_token", bool(env.get("PETRA_REPO_TOKEN")),
-         "no PETRA_REPO_TOKEN (optional): a scan's daily report stays in its run directory instead of becoming the "
-         "day's issue in Petra's repository, and the curator's knowledge changes stay in this checkout instead "
-         "of a pull request (README step 1)"),
+         "no PETRA_REPO_TOKEN (optional): the curator's knowledge changes stay in this checkout instead of a "
+         "pull request to Petra's repository (README step 1)"),
     ]
     found = {}
     log("checks (detect only):")

@@ -11,10 +11,11 @@ scarcest resource in the community, and a careless agent spends it.
   production service — need a human review. The agent does not carry that responsibility.
 - Petra never pushes, never opens or comments on an upstream PR or issue by itself. It prepares the
   branch, the PR body, the reply draft and the exact commands, and stops.
-- It posts only to Petra's own repository, with a token for that repository alone
-  (`PETRA_REPO_TOKEN`): a scan's daily report as an issue (`scripts/post_queue.py`), and the curator's
-  knowledge changes as a pull request to main, which a human merges (`scripts/propose_knowledge.py`).
-  That repository is public: nothing posted there names the machine, its paths or internal sources.
+- A scan's daily report is a file a human shares; Petra posts it nowhere. The one thing it posts is
+  the curator's knowledge changes, as a pull request to main of Petra's own repository, which a human
+  merges (`scripts/propose_knowledge.py`), and only with a token the human set for that repository
+  alone (`PETRA_REPO_TOKEN`). That repository is public: nothing posted there, or in a report meant to
+  be shared, names the machine, its paths or internal sources.
 
 ## 2. Conduct toward the community
 
