@@ -5,8 +5,9 @@
     python3 scripts/post_queue.py --body RUN_DIR/daily_report.md --dry-run   # what it would do
     python3 scripts/post_queue.py --latest     # the newest report issue: date, URL, age, body (read only)
 
-This is the one thing Petra posts, and only here. It posts with PETRA_REPO_TOKEN, a fine-grained token
-for this repository alone (Issues: read and write), so it cannot post anywhere else. A second scan the
+Petra posts only to its own repository. It posts with PETRA_REPO_TOKEN when set, else GITHUB_TOKEN: one
+fine-grained token for this repository alone (README step 1), which reads every public repository and
+can write to no other, so nothing can reach upstream. A second scan the
 same day updates that day's issue; a new day's issue closes the open earlier ones as superseded. The
 repository is public, so the body must be too: a body that names a local path, this machine or an
 internal site is refused. The repository defaults to the origin of the checkout this script is in.
@@ -79,6 +80,11 @@ def plan(open_queues: list, date: str) -> dict:
     return {"action": "create", "number": None, "close": [i["number"] for i in open_queues]}
 
 
+def write_token() -> str:
+    """The token that posts: PETRA_REPO_TOKEN, else the GITHUB_TOKEN the scan reads with."""
+    return os.environ.get("PETRA_REPO_TOKEN") or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
+
+
 def api(method: str, path: str, token: str = "", data: dict | None = None):
     req = urllib.request.Request(API + path, method=method, data=json.dumps(data).encode() if data else None,
                                  headers={"Accept": "application/vnd.github+json", "User-Agent": "petra-post-queue",
@@ -137,13 +143,20 @@ def main(argv=None) -> int:
         if bad:
             print("post_queue: not posted; the body names something local or internal:\n  " + "\n  ".join(bad), file=sys.stderr)
             return 3
-        token = os.environ.get("PETRA_REPO_TOKEN", "")
+        token = write_token()
         if not token and not a.dry_run:
-            print("post_queue: PETRA_REPO_TOKEN is not set (README step 1); post later with:\n  python3 %s --body %s --date %s"
+            print("post_queue: no GITHUB_TOKEN or PETRA_REPO_TOKEN (README step 1); post later with:\n  python3 %s --body %s --date %s"
                   % (sys.argv[0], a.body, a.date), file=sys.stderr)
             return 2
         print(json.dumps(post(repo, body, a.date, token, a.dry_run), indent=1))
         return 0
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            print("post_queue: the token cannot write to %s (HTTP %d; a read-only GITHUB_TOKEN? README step 1); post "
+                  "later with:\n  python3 %s --body %s --date %s" % (repo, e.code, sys.argv[0], a.body, a.date), file=sys.stderr)
+            return 2
+        print("post_queue: %s" % e, file=sys.stderr)
+        return 1
     except (urllib.error.URLError, OSError, ValueError) as e:
         print("post_queue: %s" % e, file=sys.stderr)
         return 1

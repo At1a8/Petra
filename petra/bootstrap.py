@@ -629,11 +629,8 @@ def check_environment(env=None, keys_path: str = "") -> dict:
         ("api", api_configured(env, _expand("~", env)), "no Claude Code API access in this shell (see the next steps)"),
         ("github_token", bool(env.get("GITHUB_TOKEN") or env.get("GH_TOKEN")),
          "no GITHUB_TOKEN: GitHub then allows 60 requests an hour and 10 searches a minute per IP, so scans "
-         "crawl and can stop partway; add a read-only token to ~/.petra_env (README step 1)"),
-        ("repo_token", bool(env.get("PETRA_REPO_TOKEN")),
-         "no PETRA_REPO_TOKEN (optional): a scan's daily report stays in its run directory instead of becoming the "
-         "day's issue in Petra's repository, and the curator's knowledge changes stay in this checkout instead "
-         "of a pull request (README step 1)"),
+         "crawl and can stop partway, and nothing reaches Petra's repository (daily report, knowledge pull "
+         "request); add a fine-grained token for Petra's repository to ~/.petra_env (README step 1)"),
     ]
     found = {}
     log("checks (detect only):")

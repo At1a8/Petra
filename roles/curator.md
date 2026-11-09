@@ -34,7 +34,7 @@ Inputs: `status`, `report_path`, `phases`, `known_issues`.
    `python3 <petra_dir>/scripts/propose_knowledge.py --run-dir RUN_DIR --body RUN_DIR/knowledge_pr.md`:
    it opens, or updates, a pull request from `petra/knowledge/<run>` to main and restores `knowledge/`
    in the checkout. Exit 3: remove from your edits and the description what it lists, then run it
-   again. Exit 2 (no `PETRA_REPO_TOKEN`) or any other failure: the edits stay in the checkout; give the
+   again. Exit 2 (no token that can write to Petra's repository) or any other failure: the edits stay in the checkout; give the
    command in `notes`.
 7. Last, make sure the run freed the machine: `python3 <petra_dir>/scripts/run_lock.py release
    --run-dir RUN_DIR` (the director normally did; "held" by another run or "free" means nothing to do).

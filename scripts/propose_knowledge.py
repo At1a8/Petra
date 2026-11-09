@@ -8,8 +8,8 @@ Only changes under knowledge/ go in. They are applied as a patch onto the curren
 throwaway worktree, committed on petra/knowledge/<run directory name> and pushed there, never to main;
 the pull request targets main and a human merges it. Once it is open, those files are restored in the
 checkout, so later runs read knowledge/ as merged, not as proposed; a re-run updates the same branch
-and pull request. It pushes with PETRA_REPO_TOKEN, a fine-grained token for this repository alone
-(Contents, Pull requests: read and write). The repository is public: added lines or a body that name a
+and pull request. It pushes with PETRA_REPO_TOKEN when set, else GITHUB_TOKEN: one fine-grained token for
+this repository alone (README step 1). The repository is public: added lines or a body that name a
 local path, this machine or an internal site stop it, as in scripts/post_queue.py. Without the token,
 or on any failure, the changes stay where they are. Standard library and git only.
 """
@@ -27,7 +27,7 @@ import tempfile
 import urllib.error
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from post_queue import api, default_repo, leaks  # noqa: E402
+from post_queue import api, default_repo, leaks, write_token  # noqa: E402
 
 PETRA = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MARKER = "<!-- petra:knowledge -->"
@@ -148,21 +148,29 @@ def main(argv=None) -> int:
         if a.dry_run:
             print(json.dumps({"dry_run": True, "branch": branch, "title": title, "files": files}, indent=1))
             return 0
-        token = os.environ.get("PETRA_REPO_TOKEN", "")
+        token = write_token()
         repo = a.repo or default_repo()
+        later = "Propose them later with:\n  python3 %s --run-dir %s --body %s" % (sys.argv[0], a.run_dir, a.body)
         if not token or not repo:
-            print("propose_knowledge: %s; the changes stay in %s/knowledge. Propose them later with:\n  python3 %s "
-                  "--run-dir %s --body %s" % ("PETRA_REPO_TOKEN is not set" if not token else "no GitHub repository",
-                                              a.petra_dir, sys.argv[0], a.run_dir, a.body), file=sys.stderr)
+            print("propose_knowledge: %s; the changes stay in %s/knowledge. %s" % (
+                "no GITHUB_TOKEN or PETRA_REPO_TOKEN" if not token else "no GitHub repository", a.petra_dir, later),
+                file=sys.stderr)
             return 2
         sha = commit_branch(a.petra_dir, branch, diff, title, run, a.push_url or "https://github.com/%s.git" % repo, token)
         pr = open_pr(repo, branch, title, body, token)
         restore(a.petra_dir, tracked, untracked)
         print(json.dumps({**pr, "branch": branch, "commit": sha, "files": files}, indent=1))
         return 0
+    except urllib.error.HTTPError as e:
+        print("propose_knowledge: HTTP %d from GitHub%s; the changes stay where they are" % (
+            e.code, " (the token cannot write to the repository: a read-only GITHUB_TOKEN? README step 1)"
+            if e.code in (401, 403) else ""), file=sys.stderr)
+        return 2 if e.code in (401, 403) else 1
     except RuntimeError as e:
-        print("propose_knowledge: %s; the changes stay where they are" % e, file=sys.stderr)
-        return 4 if "apply" in str(e) else 1
+        denied = any(k in str(e) for k in ("403", "401", "Authentication failed", "Permission to"))
+        print("propose_knowledge: %s; the changes stay where they are%s" % (
+            e, " (the token cannot push: a read-only GITHUB_TOKEN? README step 1)" if denied else ""), file=sys.stderr)
+        return 4 if "apply" in str(e) else 2 if denied else 1
     except (urllib.error.URLError, OSError, ValueError) as e:
         print("propose_knowledge: %s; the changes stay where they are" % e, file=sys.stderr)
         return 1

@@ -127,12 +127,42 @@ class PostQueueTest(unittest.TestCase):
             clean, leaky = Path(d) / "clean.md", Path(d) / "leaky.md"
             clean.write_text("| 1 | task |\n")
             leaky.write_text("weights in /data/models/x\n")
-            env = {k: v for k, v in os.environ.items() if k != "PETRA_REPO_TOKEN"}
+            env = {k: v for k, v in os.environ.items() if k not in ("PETRA_REPO_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")}
             with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(post_queue, "api") as api, \
                     redirect_stderr(io.StringIO()):
                 self.assertEqual(post_queue.main(["--body", str(clean), "--repo", "At1a8/Petra"]), 2)
                 self.assertEqual(post_queue.main(["--body", str(leaky), "--repo", "At1a8/Petra"]), 3)
             api.assert_not_called()
+
+    def test_the_reading_token_posts_unless_another_is_set(self):
+        with tempfile.TemporaryDirectory() as d:
+            body = Path(d) / "daily_report.md"
+            body.write_text("| 1 | task |\n")
+            env = {k: v for k, v in os.environ.items() if k not in ("PETRA_REPO_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")}
+            seen = []
+
+            def fake(method, path, token="", data=None):
+                seen.append(token)
+                return [] if method == "GET" else {"number": 1, "html_url": "u"}
+
+            for extra, want in (({"GITHUB_TOKEN": "read-and-petra"}, "read-and-petra"),
+                                ({"GITHUB_TOKEN": "r", "PETRA_REPO_TOKEN": "petra-only"}, "petra-only")):
+                seen.clear()
+                with mock.patch.dict(os.environ, {**env, **extra}, clear=True), mock.patch.object(post_queue, "api", side_effect=fake), \
+                        redirect_stdout(io.StringIO()):
+                    self.assertEqual(post_queue.main(["--body", str(body), "--repo", "At1a8/Petra"]), 0)
+                self.assertEqual(set(seen), {want})
+
+    def test_a_token_that_cannot_write_is_reported_as_such(self):
+        import urllib.error
+        with tempfile.TemporaryDirectory() as d:
+            body = Path(d) / "daily_report.md"
+            body.write_text("| 1 | task |\n")
+            denied = urllib.error.HTTPError("u", 403, "Resource not accessible by personal access token", {}, None)
+            with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "read-only"}), mock.patch.object(post_queue, "api", side_effect=denied), \
+                    redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(post_queue.main(["--body", str(body), "--repo", "At1a8/Petra"]), 2)
+            self.assertIn("cannot write", err.getvalue())
 
     def test_latest(self):
         items = [{"number": 9, "title": "a bug", "body": ""}, self.queue(8, "2026-11-06"), self.queue(6, "2026-11-05", "closed")]
@@ -177,10 +207,10 @@ class ProposeKnowledgeTest(unittest.TestCase):
         self.show = lambda ref: subprocess.run(["git", "--git-dir", str(self.origin), "show", ref],
                                                capture_output=True, text=True).stdout
 
-    def propose(self, token="t", api=None):
-        env = {k: v for k, v in os.environ.items() if k != "PETRA_REPO_TOKEN"}
+    def propose(self, token="t", api=None, var="PETRA_REPO_TOKEN"):
+        env = {k: v for k, v in os.environ.items() if k not in ("PETRA_REPO_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")}
         if token:
-            env["PETRA_REPO_TOKEN"] = token
+            env[var] = token
         with mock.patch.dict(os.environ, env, clear=True), redirect_stdout(io.StringIO()) as out, \
                 redirect_stderr(io.StringIO()) as err, mock.patch.object(propose_knowledge, "api", side_effect=api):
             rc = propose_knowledge.main(["--run-dir", str(self.run), "--body", str(self.body), "--repo", "At1a8/Petra",
@@ -210,6 +240,18 @@ class ProposeKnowledgeTest(unittest.TestCase):
         self.assertEqual((self.petra / "knowledge" / "known_issues.md").read_text(), "# Known issues\n")
         self.assertFalse((self.petra / "knowledge" / "feature_skills").exists())
         self.assertIn("a local change", (self.petra / "petra.js").read_text())
+
+    def test_the_reading_token_is_enough(self):
+        (self.petra / "knowledge" / "known_issues.md").write_text("# Known issues\nKI-001 GLM-5.3 dcp 8\n")
+        tokens = []
+
+        def fake(method, path, token="", data=None):
+            tokens.append(token)
+            return [] if method == "GET" else {"number": 13, "html_url": "https://github.com/At1a8/Petra/pull/13"}
+
+        rc, out, err = self.propose(token="read-and-petra", api=fake, var="GITHUB_TOKEN")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(set(tokens), {"read-and-petra"})
 
     def test_nothing_leaves_without_a_token_with_a_leak_or_without_changes(self):
         self.assertEqual(self.propose()[0:2], (0, '{"action": "none", "reason": "no changes under knowledge/"}\n'))

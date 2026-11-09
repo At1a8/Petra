@@ -123,7 +123,7 @@ produced so far.
   <petra_dir>/scripts/post_queue.py --body RUN_DIR/daily_report.md --date <the scan's UTC date>`. It
   updates that day's issue if there is one and closes earlier ones; put the URL it prints in the report.
   Exit 3 means the body names something local or internal: remove what it lists from `daily_report.md`
-  and post again. Exit 2 (no `PETRA_REPO_TOKEN`) or a network failure: give the command in the report
+  and post again. Exit 2 (no token that can write to Petra's repository) or a network failure: give the command in the report
   for a human to run. Post nothing else, anywhere.
 - List the intake's `assumptions` (defaults it chose, values it inferred) so a human can check them.
 

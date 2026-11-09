@@ -92,8 +92,7 @@ command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || curl -fsSL https:/
 运行最后两行之前，先把 `<your AMD LLM gateway key>` 和 `<your GitHub token>` 换成你自己的值：每一行都只在 `~/.petra_env` 里还没有这个 key 时才写入，所以以后要换 key，直接编辑这个文件。`~/.petra_env` 把 key 保存在宿主机上，只有你能读取，每个容器都会加载它。
 
 - **LLM key（必填）。** 写的是 AMD LLM 网关 key 时，第 3 步会让 Claude Code 走这个网关（`https://llm-api.amd.com/Unified`，key 放在 `Ocp-Apim-Subscription-Key` 请求头里），网关按 Claude 模型的常用名字提供服务。不在 AMD 内部时，改写成 `export ANTHROPIC_API_KEY=sk-ant-...`，或者其他网关（`ANTHROPIC_BASE_URL` 加上 `ANTHROPIC_AUTH_TOKEN` 或 `ANTHROPIC_CUSTOM_HEADERS`）。用 Claude 订阅时不写 key，在首次启动时登录（第 4 步）。
-- **GitHub token（强烈建议）。** scan 和 issue 运行要通过 GitHub API 读取 issue、PR 和 CI 跟踪记录。没有 token 时，GitHub 对每个 IP 地址每小时只允许 60 次请求、每分钟 10 次搜索，同一出口 IP 下的所有人共用这个额度，扫描会非常慢，还可能中途停下；有 token 时每小时 5000 次。只读权限就够了，Petra 从不 push，也从不往上游发帖：在 github.com 上进入 Settings → Developer settings → Personal access tokens → Fine-grained tokens，权限选 *Public repositories (read-only)*（不勾选任何权限的 classic token 也可以）。
-- **Petra 仓库 token（可选）。** Petra 会把结果发到它自己的仓库，开发者在 GitHub 网页上就能看到：scan 的日报发成当天的 issue（当天再扫一次会更新它，第二天的会把它关掉），curator 的知识更新则从 `petra/knowledge/<run>` 分支向 main 提一个 PR，由你审阅合并。这需要一个只对这个仓库有效的 token，这样它没法往别处发：fine-grained token，*Only select repositories* 选 `At1a8/Petra`，*Repository permissions* 里 *Issues*、*Contents* 和 *Pull requests* 都选 *Read and write*，然后以 `export PETRA_REPO_TOKEN=<token>` 写进 `~/.petra_env`。Petra 只 push `petra/` 开头的分支；在 GitHub 上给 main 开分支保护（要求通过 PR 合并），这个 token 就也改不了 main。没有这个 token 时，队列只留在运行目录里，知识更新只留在容器的 checkout 里，报告会给出发布它们的命令。
+- **GitHub token（强烈建议）。** scan 和 issue 运行要通过 GitHub API 读取 issue、PR、CI 运行和它们的日志。没有 token 时，GitHub 对每个 IP 地址每小时只允许 60 次请求、每分钟 10 次搜索，同一出口 IP 下的所有人共用这个额度，扫描会非常慢，还可能中途停下；有 token 时每小时 5000 次。Petra 也用它往自己的仓库发结果，开发者在 GitHub 网页上就能看到：scan 的日报发成当天的 issue（当天再扫一次会更新它，第二天的会把它关掉），curator 的知识更新则从 `petra/knowledge/<run>` 分支向 main 提一个 PR，由你审阅合并。一个 fine-grained token 就能同时做到：在 github.com 上进入 Settings → Developer settings → Personal access tokens → Fine-grained tokens，*Only select repositories* 选 `At1a8/Petra`，*Repository permissions* 里 *Issues*、*Contents* 和 *Pull requests* 都选 *Read and write*。它照样能读所有公开仓库，却写不了别的仓库，所以 Petra 做什么都到不了上游；再在 GitHub 上给 main 开分支保护（要求通过 PR 合并），它也改不了 main。不要把 classic token 或者授权给 *All repositories* 的 token 放在这里：容器里的每个 agent 都能读到它。只读的 token（*Public repositories*）读取效果一样，只是什么都发不出去，报告会给出发布命令。如果想让读和写用不同的 token，就另外设置 `PETRA_REPO_TOKEN`。
 
 ### 2. 启动容器（宿主机）
 
@@ -207,7 +206,7 @@ cp -r /workspace/Petra/exp/<run> "$PETRA_HOST_HOME"/ && /workspace/Petra/scripts
 | `PETRA_REPO_URL`、`PETRA_REF` | bootstrap | `https://github.com/At1a8/Petra.git`，它的默认分支 |
 | `CLAUDE_VERSION`、`CLAUDE_BIN_DIR` | bootstrap | `latest`，`~/.local/bin` |
 | `CLAUDE_CONFIG_DIR` | bootstrap、Claude Code | 容器里的 root 用你宿主机上的 `~/.petra/claude`；已经设置时原样使用 |
-| `PETRA_REPO_TOKEN` | `~/.petra_env`、`scripts/post_queue.py`、`scripts/propose_knowledge.py` | 不设置；只对 Petra 自己仓库有 Issues、Contents、Pull requests 读写权限的 fine-grained token，scan 用它发布当天的日报，curator 用它提 PR |
+| `PETRA_REPO_TOKEN` | `~/.petra_env`、`scripts/post_queue.py`、`scripts/propose_knowledge.py` | 不设置：由 `GITHUB_TOKEN` 发布当天的日报和 curator 的 PR；设置后改用这个只对 Petra 自己仓库有 Issues、Contents、Pull requests 读写权限的 token |
 | `LLM_GATEWAY_KEY` | `~/.petra_env`、容器的 shell 配置 | 不设置；设置后 Claude Code 走 AMD LLM 网关，除非 `ANTHROPIC_BASE_URL` 指定了别的地址 |
 | `PETRA_FRAMEWORK_DIR`、`PETRA_FRAMEWORK_REPO` | bootstrap：`--framework-dir`、`--framework-repo` | 镜像里的 `/sgl-workspace/sglang`；sglang |
 | `PETRA_SKIP_BOOTSTRAP` | bootstrap | 不设置；设置后安装这个包时没有任何副作用（CI、构建镜像） |

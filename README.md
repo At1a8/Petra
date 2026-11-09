@@ -145,22 +145,21 @@ every container loads it.
   instead, or another gateway (`ANTHROPIC_BASE_URL` with `ANTHROPIC_AUTH_TOKEN` or
   `ANTHROPIC_CUSTOM_HEADERS`). With a Claude subscription, leave the key out and log in at the first
   start (step 4).
-- **GitHub token (strongly recommended).** Scans and issue runs read issues, pull requests and CI
-  trackers through GitHub's API. Without a token GitHub allows 60 requests an hour and 10 searches a
-  minute per IP address, shared with everyone behind the same address, so a scan crawls and can stop
-  partway; with one, 5000 requests an hour. Read-only is enough, since Petra never pushes or posts
-  upstream: on github.com, Settings → Developer settings → Personal access tokens → Fine-grained tokens,
-  with *Public repositories (read-only)* access (a classic token with no scopes also works).
-- **Petra repository token (optional).** Petra posts to its own repository, so developers see the
-  results on GitHub: a scan's daily report as the day's issue (a second scan that day updates it, the
-  next day's closes it), and the curator's knowledge changes as a pull request from a
-  `petra/knowledge/<run>` branch to main, which you review and merge. That takes a token for this
-  repository alone, so it can post nowhere else: a fine-grained token with *Only select
-  repositories* → `At1a8/Petra` and *Repository permissions* → *Issues*, *Contents* and *Pull
-  requests*: *Read and write*, added to `~/.petra_env` as `export PETRA_REPO_TOKEN=<token>`. Petra
-  pushes only `petra/` branches; protect main on GitHub (require a pull request) so the token cannot
-  change it either. Without the token the queue stays in the run directory, the knowledge changes stay
-  in the container's checkout, and the report gives the commands that post them.
+- **GitHub token (strongly recommended).** Scans and issue runs read issues, pull requests, CI runs
+  and their logs through GitHub's API. Without a token GitHub allows 60 requests an hour and 10
+  searches a minute per IP address, shared with everyone behind the same address, so a scan crawls
+  and can stop partway; with one, 5000 requests an hour. Petra also posts to its own repository with
+  it, so developers see the results on GitHub: a scan's daily report as the day's issue (a second scan
+  that day updates it, the next day's closes it), and the curator's knowledge changes as a pull
+  request from a `petra/knowledge/<run>` branch to main, which you review and merge. One fine-grained
+  token does both: on github.com, Settings → Developer settings → Personal access tokens →
+  Fine-grained tokens, *Only select repositories* → `At1a8/Petra`, and *Repository permissions* →
+  *Issues*, *Contents* and *Pull requests*: *Read and write*. It still reads every public repository,
+  and it can write to no other, so nothing Petra does can reach upstream; protect main on GitHub
+  (require a pull request) so it cannot change main either. Never put a classic token, or one for
+  *All repositories*, here: every agent in the container can read it. A read-only token (*Public
+  repositories*) reads just as well, and then nothing is posted: the report gives the commands. To
+  post with another token than the one that reads, set `PETRA_REPO_TOKEN`.
 
 ### 2. Start a container (host)
 
@@ -328,7 +327,7 @@ step 3 the GEAK way, cloning Petra to `/workspace/Petra` (pip shows the output o
 | `PETRA_REPO_URL`, `PETRA_REF` | bootstrap | `https://github.com/At1a8/Petra.git`, its default branch |
 | `CLAUDE_VERSION`, `CLAUDE_BIN_DIR` | bootstrap | `latest`, `~/.local/bin` |
 | `CLAUDE_CONFIG_DIR` | bootstrap, Claude Code | your `~/.petra/claude` on the host, for root in the container; when already set, used as it is |
-| `PETRA_REPO_TOKEN` | `~/.petra_env`, `scripts/post_queue.py`, `scripts/propose_knowledge.py` | unset; a fine-grained token for Petra's own repository (Issues, Contents, Pull requests: read and write), with which a scan posts the day's report and the curator opens its pull request |
+| `PETRA_REPO_TOKEN` | `~/.petra_env`, `scripts/post_queue.py`, `scripts/propose_knowledge.py` | unset: `GITHUB_TOKEN` posts the day's report and the curator's pull request; set, this token for Petra's own repository (Issues, Contents, Pull requests: read and write) does instead |
 | `LLM_GATEWAY_KEY` | `~/.petra_env`, the container's shell settings | unset; set, Claude Code runs on the AMD LLM gateway unless `ANTHROPIC_BASE_URL` names another |
 | `PETRA_FRAMEWORK_DIR`, `PETRA_FRAMEWORK_REPO` | bootstrap: `--framework-dir`, `--framework-repo` | the image's `/sgl-workspace/sglang`; sglang |
 | `PETRA_SKIP_BOOTSTRAP` | bootstrap | unset; set it to install the package with no side effects (CI, images) |
