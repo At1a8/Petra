@@ -14,7 +14,7 @@ gates:
 | `issue` | Triage → Reproduce → Diagnose (`issue_triage.md`) | Implement → Verify, with the issue's reproduction as an extra gate → Review → PR → Report |
 | `ci` | Classify → Bisect (`ci_triage.md`) | Implement → Verify, with the failing test as an extra gate → Review → PR → Report |
 | `perf` | Profile → Plan (`system_perf.md`) | Implement → Verify (correctness first) → Performance → Review → PR → Report |
-| `scan` | Collect → Dispatch | writes a ranked task queue and changes no code |
+| `scan` | Collect → Dispatch | writes the day's report on the framework and a ranked task queue, and changes no code |
 
 Every mode starts from a task definition (`../templates/task_definition.md`). A request in plain
 words, or a definition missing something its mode needs, goes through the Intake first

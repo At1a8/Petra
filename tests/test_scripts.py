@@ -84,8 +84,9 @@ class PostQueueTest(unittest.TestCase):
     """The daily queue issue in Petra's own repository; the GitHub API is faked."""
 
     def queue(self, number, date, state="open"):
-        return {"number": number, "title": post_queue.title(date), "state": state,
-                "html_url": "https://github.com/At1a8/Petra/issues/%d" % number, "body": "q\n" + post_queue.MARKER}
+        return {"number": number, "title": post_queue.title(date), "state": state, "created_at": date + "T01:00:00Z",
+                "updated_at": date + "T02:00:00Z", "html_url": "https://github.com/At1a8/Petra/issues/%d" % number,
+                "body": "q\n" + post_queue.MARKER}
 
     def test_repo_from_url(self):
         for url in ("https://github.com/At1a8/Petra.git", "git@github.com:At1a8/Petra.git", "https://github.com/At1a8/Petra"):
@@ -118,7 +119,7 @@ class PostQueueTest(unittest.TestCase):
         self.assertEqual([(m, p) for m, p, _ in calls[1:]], [("POST", "/repos/At1a8/Petra/issues"),
                                                            ("POST", "/repos/At1a8/Petra/issues/3/comments"),
                                                            ("PATCH", "/repos/At1a8/Petra/issues/3")])
-        self.assertEqual(calls[1][2]["title"], "Task queue 2026-11-06")
+        self.assertEqual(calls[1][2]["title"], "Petra daily report 2026-11-06")
         self.assertTrue(calls[1][2]["body"].endswith(post_queue.MARKER + "\n"))
 
     def test_nothing_is_posted_without_the_token_or_with_a_leak(self):
@@ -137,7 +138,10 @@ class PostQueueTest(unittest.TestCase):
         items = [{"number": 9, "title": "a bug", "body": ""}, self.queue(8, "2026-11-06"), self.queue(6, "2026-11-05", "closed")]
         with mock.patch.object(post_queue, "api", return_value=items):
             got = post_queue.latest("At1a8/Petra")
-        self.assertEqual((got["date"], got["number"], got["state"]), ("2026-11-06", 8, "open"))
+        self.assertEqual((got["date"], got["number"], got["state"], got["updated_at"]), ("2026-11-06", 8, "open", "2026-11-06T02:00:00Z"))
+        self.assertIsInstance(got["age_hours"], float)
+        now = post_queue.dt.datetime(2026, 11, 7, 1, 30, tzinfo=post_queue.dt.timezone.utc)
+        self.assertEqual(post_queue.age_hours("2026-11-06T02:00:00Z", now), 23.5)
         with mock.patch.object(post_queue, "api", return_value=[]):
             self.assertEqual(post_queue.latest("At1a8/Petra"), {})
 
@@ -303,6 +307,57 @@ class ScanCiTest(unittest.TestCase):
         self.assertEqual((top["first_seen"], top["last_seen"]), ("2026-10-22", "2026-10-25"))
         self.assertEqual(top["statuses"], {"recurring": 1, "never-passed": 1})
         self.assertEqual(clusters[1]["statuses"], {"flaky": 1})
+
+    LOG = textwrap.dedent("""\
+        2026-11-09T02:56:19.1234567Z \x1b[36;1m[server-test] FAILED during server startup: wan_lora\x1b[0m
+        2026-11-09T03:40:01.0000000Z E   RuntimeError: Server exited early (code 1).
+        2026-11-09T03:40:01.0000000Z E   RuntimeError: Server exited early (code 1).
+        2026-11-09T03:40:02.0000000Z =========================== short test summary info ============================
+        2026-11-09T03:40:02.0000000Z ERROR sglang/multimodal_gen/test/server/test_server_2_gpu.py::TestTwoGpu::test_gen[wan_lora]
+        2026-11-09T03:40:02.0000000Z = 14 passed, 1 skipped, 1 error in 2566.37s (0:42:46) =
+        2026-11-09T03:40:03.0000000Z ======================== 2 skipped, 3 warnings in 7.17s ========================
+        2026-11-09T03:40:04.0000000Z Exception: Server process exited with code -9. Check server logs for errors.
+        2026-11-09T03:40:04.0000000Z \u2717 FAILED: /sglang-checkout/test/registered/amd/accuracy/test_qwen_eval.py returned exit code 1
+        2026-11-09T03:40:05.0000000Z ##[error]Process completed with exit code 1.
+        """)
+
+    def test_parse_log_reads_pytest_and_run_suite(self):
+        got = scan_ci.parse_log(self.LOG)
+        self.assertEqual(got["failed_tests"], ["sglang/multimodal_gen/test/server/test_server_2_gpu.py::TestTwoGpu::test_gen[wan_lora]",
+                                               "test/registered/amd/accuracy/test_qwen_eval.py"])
+        self.assertEqual(got["errors"], ["RuntimeError: Server exited early (code 1).",
+                                         "Exception: Server process exited with code -9. Check server logs for errors."])
+        self.assertEqual(got["totals"], "14 passed, 1 skipped, 1 error")
+        self.assertEqual(got["gh_errors"], ["Process completed with exit code 1."])
+
+    def test_main_status_finds_since_when_a_job_fails(self):
+        def run(i, event="schedule", repo="sgl-project/sglang"):
+            return {"id": i, "event": event, "name": "Nightly Test (AMD)", "conclusion": "failure", "created_at": "2026-11-0%dT21:04:00Z" % i,
+                    "head_sha": "%040d" % i, "html_url": "https://github.com/r/%d" % i, "head_repository": {"full_name": repo}}
+
+        def job(name, conclusion):
+            return {"id": hash(name) % 1000, "name": name, "conclusion": conclusion, "html_url": "https://github.com/j",
+                    "steps": [{"name": "Accuracy " + name, "conclusion": conclusion}]}
+
+        runs = [run(8), run(7, "pull_request", "someone/fork"), run(6), run(5), run(4)]
+        jobs = {8: [job("acc-qwen", "failure"), job("acc-glm", "success"), job("check-all-jobs", "failure"), job("pr-test-amd-finish", "failure")],
+                6: [job("acc-qwen", "failure"), job("acc-glm", "success")],
+                5: [job("acc-qwen", "success")], 4: [job("acc-qwen", "failure")]}
+
+        def get(path, params=None):
+            if path.endswith("/runs"):
+                return {"workflow_runs": runs}
+            return {"jobs": jobs[int(path.split("/")[-2])]}
+
+        with mock.patch.object(scan_ci.gh, "get", side_effect=get), \
+                mock.patch.object(scan_ci.gh, "text", return_value=self.LOG):
+            got = scan_ci.main_status("sgl-project/sglang", ["nightly-test-amd.yml"])
+        self.assertEqual(got["workflows"][0]["failed_jobs"], 1, "check-all-jobs and *-finish only report the others")
+        f = got["failures"][0]
+        self.assertEqual((f["job"], f["consecutive_failures"]), ("acc-qwen", 2))
+        self.assertEqual((f["failing_since"]["run_at"], f["last_success"]["run_at"]), ("2026-11-06T21:04:00Z", "2026-11-05T21:04:00Z"))
+        self.assertEqual(f["failed_steps"], ["Accuracy acc-qwen"])
+        self.assertIn("test/registered/amd/accuracy/test_qwen_eval.py", f["failed_tests"])
 
 
 class ScanIssuesTest(unittest.TestCase):

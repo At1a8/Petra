@@ -497,6 +497,26 @@ const scenarios = [
     check(eqList(r.phases, ['Collect', 'Dispatch', 'Report']), `phases ${r.phases}`);
     check(!r.keys.some((k) => k.startsWith('implementer')), 'no implementer in scan');
     check(r.result.queue && r.result.queue[0].priority === 'P0', 'queue surfaced');
+    const collect = r.calls.find((c) => c.key === 'scout:collect').ins;
+    check(eqList(collect.sources, ['ci', 'issues', 'upstream']) && collect.rescan === false,
+      `the daily report's sources by default, no rescan: ${collect.sources} ${collect.rescan}`);
+  }],
+  ['scan: a report from the last 24 hours makes the run ask first; rescan=true scans again', async () => {
+    const recent = (ins) => (ins.rescan
+      ? { lock: 'acquired', run_dir: RUN, candidates_path: `${RUN}/candidates.json`, counts: { ci: 5, issues: 30, upstream: 40 } }
+      : { lock: 'skipped', run_dir: '', candidates_path: '',
+        recent: { at: '2026-11-09T01:12:00Z', url: 'https://github.com/At1a8/Petra/issues/3', run_dir: '' } });
+    const asked = await run({ mode: 'scan' }, { 'scout:collect': recent });
+    check(asked.result.status === 'needs_input' && asked.result.stopped_at === 'Collect' && eqList(asked.keys, ['scout:collect']),
+      `asks before scanning again: ${asked.result.status}, calls ${asked.keys}`);
+    check(asked.result.questions[0].field === 'rescan' && asked.result.questions[0].question.includes('issues/3'),
+      'the question names the recent report');
+    const again = await run({ mode: 'scan', answers: { rescan: true } }, { 'scout:collect': recent });
+    check(again.result.status === 'queued' && again.calls.find((c) => c.key === 'scout:collect').ins.rescan === true,
+      `answers={"rescan": true} scans again: ${again.result.status}`);
+    const vllm = [{ name: 'vllm', url: 'https://github.com/vllm-project/vllm' }];
+    const more = await run({ mode: 'scan', upstream_repos: vllm });
+    check(more.calls.find((c) => c.key === 'scout:collect').ins.upstream_repos[0].name === 'vllm', 'upstream_repos reach the scout');
   }],
   ['kernel: the default back end records hand-offs and runs nothing', async () => {
     const r = await run({ mode: 'feature', task: 't' }, withKernelHandoff('decode hot path'));

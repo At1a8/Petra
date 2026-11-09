@@ -9,7 +9,7 @@
 |---|---|---|---|
 | upstream | <repo>, <commit range> | | `upstream.json` |
 | issues | open AMD-related issues | | `issues.json` |
-| ci | Failure Tracker / nightly | | `ci.json` |
+| ci | AMD CI on main (runs and logs), Failure Trackers | | `ci.json` |
 | hardware | platform-gate audit of <arch> | | `gates.json` |
 
 ## Ranked tasks

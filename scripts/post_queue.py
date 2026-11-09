@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Post a scan's task queue as an issue in Petra's own GitHub repository, one issue per UTC day.
+"""Post a scan's daily report as an issue in Petra's own GitHub repository, one issue per UTC day.
 
-    python3 scripts/post_queue.py --body RUN_DIR/queue_issue.md --date 2026-11-06
-    python3 scripts/post_queue.py --body RUN_DIR/queue_issue.md --dry-run   # what it would do
-    python3 scripts/post_queue.py --latest     # the newest queue issue: date, URL, body (read only)
+    python3 scripts/post_queue.py --body RUN_DIR/daily_report.md --date 2026-11-06
+    python3 scripts/post_queue.py --body RUN_DIR/daily_report.md --dry-run   # what it would do
+    python3 scripts/post_queue.py --latest     # the newest report issue: date, URL, age, body (read only)
 
 This is the one thing Petra posts, and only here. It posts with PETRA_REPO_TOKEN, a fine-grained token
 for this repository alone (Issues: read and write), so it cannot post anywhere else. A second scan the
@@ -32,7 +32,13 @@ LOCAL = re.compile(r"(?<![\w.-])/(?:data\d*|mnt|home|root|workspace|sgl-workspac
 
 
 def title(date: str) -> str:
-    return "Task queue %s" % date
+    return "Petra daily report %s" % date
+
+
+def age_hours(stamp: str, now: dt.datetime | None = None) -> float:
+    """Hours since a GitHub timestamp (2026-11-09T01:11:40Z)."""
+    then = dt.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+    return round(((now or dt.datetime.now(dt.timezone.utc)) - then).total_seconds() / 3600, 1)
 
 
 def repo_from_url(url: str) -> str:
@@ -87,8 +93,10 @@ def latest(repo: str, token: str = "") -> dict:
         return {}
     i = items[0]
     m = re.search(r"(\d{4}-\d{2}-\d{2})", i.get("title", ""))
+    updated = i.get("updated_at") or i.get("created_at") or ""
     return {"date": m.group(1) if m else "", "number": i["number"], "url": i.get("html_url", ""),
-            "state": i.get("state", ""), "body": i.get("body", "")}
+            "state": i.get("state", ""), "created_at": i.get("created_at", ""), "updated_at": updated,
+            "age_hours": age_hours(updated) if updated else None, "body": i.get("body", "")}
 
 
 def post(repo: str, body: str, date: str, token: str, dry_run: bool = False) -> dict:
@@ -110,8 +118,8 @@ def post(repo: str, body: str, date: str, token: str, dry_run: bool = False) -> 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Post a scan's task queue as an issue in Petra's own repository.")
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--body", help="the issue body, e.g. RUN_DIR/queue_issue.md")
-    g.add_argument("--latest", action="store_true", help="print the newest queue issue and exit")
+    g.add_argument("--body", help="the issue body, e.g. RUN_DIR/daily_report.md")
+    g.add_argument("--latest", action="store_true", help="print the newest report issue and exit")
     ap.add_argument("--date", default=dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d"), help="UTC day (default today)")
     ap.add_argument("--repo", default="", help="owner/name (default: the origin of this checkout)")
     ap.add_argument("--dry-run", action="store_true", help="show what would be posted, closed or updated")
