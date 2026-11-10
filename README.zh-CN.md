@@ -40,7 +40,7 @@ kernel 级的工作——调优 Petra 为某个特性写的 kernel，或者 kern
 
 - 只有 **implementer** 修改框架源码，而且只在任务自己的分支上改；
 - 负责测量的角色（test engineer、verify engineer、performance engineer）、intake 和 reviewer 从不修改框架源码；负责测量的角色从不复用别人的数据，而是全部重新跑一遍；
-- **curator** 只修改 Petra 自己的 `knowledge/`，并且不提交，留给人审阅；
+- **curator** 只修改 Petra 自己的 `knowledge/`，并把改动作为 PR 提到 Petra 仓库，由你审阅合并（需要 `PETRA_REPO_TOKEN`；没有时改动留在 checkout 里，不提交）；
 - 没有任何角色会 push，或往上游发帖：PR engineer 只返回确切的 `git push` 命令，issue 回复都是草稿；scan 的日报是一个由你来分享的文件；唯一会发出去的是 curator 的知识更新：一个提到 Petra 自己仓库、由你合并的 PR，而且只有在你为此设置了 token 时才会发。
 
 | 角色 | 阶段 | 职责 |
