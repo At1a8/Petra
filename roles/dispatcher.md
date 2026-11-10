@@ -31,7 +31,8 @@ Input: `candidates_path`.
    AMD CI on main, every failing job with since when it fails, when it last passed, its failed tests or
    first error and its class; (2) every open AMD user issue under P0, P1 or P2; (3) the upstream
    changes AMD needs to follow, per repository; (4) the top 10 tasks, their definitions folded in
-   `<details>`. Against `RUN_DIR/previous_report.md`, mark what is *new* and list what was resolved or
+   `<details>`. The header names the image from `RUN_DIR/image.txt`, and the newest daily one when it
+   is older. Against `RUN_DIR/previous_report.md`, mark what is *new* and list what was resolved or
    closed since. It is written to be made public: nothing about this machine or its owner, no
    hostnames, no local paths (`/data`, `/mnt`, `/home`, `/workspace`, `/sgl-workspace`, ...), weights
    only as `model_path=<weights>`, no internal sites or names; that and the local detail stay in

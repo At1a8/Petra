@@ -213,6 +213,17 @@ class RunDockerTest(unittest.TestCase):
         self.assertEqual(self.run_docker(existing="rocm/sgl-dev:old", image="rocm/sgl-dev:old"), (0, enter))
         self.assertEqual(self.run_docker(existing="rocm/sgl-dev:old", image="rocm/sgl-dev:new"), (1, [inspect]))
 
+    def test_entering_a_container_on_an_older_image_says_so(self):
+        fake_py = self.tmp / "py"
+        make_exe(fake_py / "python3").write_text('#!/bin/sh\necho "older rocm/sgl-dev:v0.5.23-rocm10-mi35x-20261109"\n')
+        env = {"PATH": "%s:%s" % (fake_py, self.path), "HOME": str(self.tmp / "home"), "USER": "tester",
+               "DOCKER_LOG": str(self.log), "FAKE_IMAGE": "rocm/sgl-dev:v0.5.23-rocm10-mi35x-20261105", "IMAGE": ""}
+        r = subprocess.run(["bash", str(ROOT / "scripts" / "run_docker.sh")], env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("not the newest daily image any more; that is rocm/sgl-dev:v0.5.23-rocm10-mi35x-20261109", r.stderr)
+        self.assertIn("NAME=tester-", r.stderr)
+        self.assertEqual(self.log.read_text().splitlines()[-1], "exec -it -w /workspace tester bash", "it still goes in")
+
     def test_a_new_container_starts_in_workspace(self):
         rc, calls = self.run_docker(image="rocm/sgl-dev:new")
         self.assertEqual((rc, len(calls), calls[-1].split()[:2]), (0, 2, ["run", "-it"]))

@@ -286,6 +286,27 @@ const scenarios = [
     const setup = (await run({ mode: 'issue', task: 'i' })).calls.find((c) => c.key === 'director:setup');
     check(String(setup.ins.lock_idle_hours) === '12', `idle hours for the lock: ${setup.ins.lock_idle_hours}`);
   }],
+  ['image: a task on an image other than the newest daily one stops at Setup to ask; image_ok=true goes on', async () => {
+    const older = (ins) => (ins.image_ok ? undefined : {
+      lock: 'skipped', run_dir: '', baseline_status: 'skip', gpu_ids: '',
+      image: { current: 'rocm/sgl-dev:v0.5.23-rocm10-mi35x-20261105', wanted: 'rocm/sgl-dev:v0.5.23-rocm10-mi35x-20261109', verdict: 'older' } });
+    const ok = { lock: 'acquired', run_dir: RUN, baseline_status: 'pass', baseline: '3/3 runs within spread', branch: 'petra/task',
+      worktree: '/sgl-workspace/sglang', gpu_ids: '0,1' };
+    for (const mode of ['feature', 'issue', 'ci', 'perf']) {
+      const asked = await run({ mode, task: 't' }, { 'director:setup': older });
+      check(asked.result.status === 'needs_input' && asked.result.stopped_at === 'Setup' && eqList(asked.keys, ['director:setup']),
+        `${mode}: asks before anything is created: ${asked.result.status}, calls ${asked.keys}`);
+      check(asked.result.questions[0].field === 'image_ok' && asked.result.questions[0].question.includes('20261109'),
+        `${mode}: the question names the newest image`);
+    }
+    const goes = await run({ mode: 'issue', task: 't', answers: { image_ok: true } },
+      { 'director:setup': (ins) => (ins.image_ok ? ok : older(ins)) });
+    check(goes.result.status !== 'needs_input' && goes.calls.find((c) => c.key === 'director:setup').ins.image_ok === true,
+      `answers={"image_ok": true} runs on: ${goes.result.status}`);
+    const named = await run({ mode: 'issue', task: 't', image: 'rocm/sgl-dev:v0.5.22-rocm10-mi35x-20261021' });
+    check(named.calls.find((c) => c.key === 'director:setup').ins.image === 'rocm/sgl-dev:v0.5.22-rocm10-mi35x-20261021',
+      'a named image reaches Setup');
+  }],
   ['pr: what the PR engineer finds missing goes back through implement, verify and review', async () => {
     const r = await run({ mode: 'ci', task: 'c' }, {
       'pr_engineer:pr': (ins, n) => (n === 1

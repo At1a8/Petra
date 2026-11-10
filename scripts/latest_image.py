@@ -6,10 +6,12 @@ starts from this image, and the director compares the image a run uses with it.
 
     python3 scripts/latest_image.py                          # ROCm 10, MI35x (the default)
     python3 scripts/latest_image.py --variant rocm10-mi30x   # another GPU or ROCm
+    python3 scripts/latest_image.py --compare rocm/sgl-dev:v0.5.23-rocm10-mi35x-20261105
+        # one line: "current", "older <newest image>", "unknown" (Docker Hub not readable) or "not-daily"
 
 Only the daily sglang builds count (v<version>-<variant>-<YYYYMMDD>); the miles images in the same
 repository are for reinforcement learning and are skipped. Prints nothing and exits 1 when Docker Hub
-cannot be read or has no such tag. Standard library only.
+cannot be read or has no such tag; --compare always exits 0. Standard library only.
 """
 from __future__ import annotations
 
@@ -59,12 +61,43 @@ def fetch(repo: str, variant: str, timeout: float, pages: int = 2) -> list:
     return results
 
 
+def parse_daily(image: str) -> tuple[str, str, str] | None:
+    """(repository, variant, date) of a daily sglang image, None for any other image."""
+    repo, _, tag = image.rpartition(":")
+    m = re.fullmatch(r"v\d+(?:\.\d+)*[0-9a-z.]*-(.+)-(\d{8})", tag)
+    return (repo or REPO, m.group(1), m.group(2)) if m and "miles" not in m.group(1) else None
+
+
+def compare(image: str, results: list | None) -> str:
+    """How an image stands against the newest daily one of its variant: current, older <newest>,
+    unknown (no tag list) or not-daily."""
+    daily = parse_daily(image)
+    if not daily:
+        return "not-daily"
+    repo, variant, date = daily
+    newest = pick(results, variant) if results is not None else ""
+    if not newest:
+        return "unknown"
+    if newest == image.rpartition(":")[2] or daily_key(newest, variant)[0] <= date:
+        return "current"
+    return "older %s:%s" % (repo, newest)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Print the newest daily sglang image on Docker Hub.")
     ap.add_argument("--repo", default=REPO)
     ap.add_argument("--variant", default=VARIANT, help="ROCm and GPU part of the tag (default %(default)s)")
+    ap.add_argument("--compare", metavar="IMAGE", help="say whether IMAGE is the newest daily image of its variant")
     ap.add_argument("--timeout", type=float, default=20, help="seconds per request (default %(default)s)")
     a = ap.parse_args(argv)
+    if a.compare:
+        daily = parse_daily(a.compare)
+        try:
+            results = fetch(daily[0], daily[1], a.timeout) if daily else None
+        except (OSError, ValueError):
+            results = None
+        print(compare(a.compare, results))
+        return 0
     try:
         tag = pick(fetch(a.repo, a.variant, a.timeout), a.variant)
     except (OSError, ValueError) as e:
