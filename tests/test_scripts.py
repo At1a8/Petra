@@ -79,6 +79,18 @@ class LatestImageTest(unittest.TestCase):
         self.assertEqual(latest_image.daily_key("v0.5.22.post1-rocm10-mi35x-20261103", "rocm10-mi35x"),
                          ("20261103", (0, 5, 22)))
 
+    def test_compare_with_the_newest_of_the_same_variant(self):
+        self.assertEqual(latest_image.parse_daily("rocm/sgl-dev:v0.5.23-rocm10-mi35x-20261102"),
+                         ("rocm/sgl-dev", "rocm10-mi35x", "20261102"))
+        self.assertIsNone(latest_image.parse_daily("rocm/sgl-dev:miles-rocm10-mi35x-20261104"))
+        self.assertIsNone(latest_image.parse_daily("my/custom:latest"))
+        cmp = latest_image.compare
+        self.assertEqual(cmp("rocm/sgl-dev:v0.5.23-rocm10-mi35x-20261102", self.TAGS), "older rocm/sgl-dev:v0.5.23-rocm10-mi35x-20261103")
+        self.assertEqual(cmp("rocm/sgl-dev:v0.5.23-rocm10-mi35x-20261103", self.TAGS), "current")
+        self.assertEqual(cmp("rocm/sgl-dev:v0.5.23-rocm720-mi30x-20261104", self.TAGS), "current", "a variant against its own newest")
+        self.assertEqual(cmp("rocm/sgl-dev:v0.5.23-rocm10-mi35x-20261102", None), "unknown", "Docker Hub not readable")
+        self.assertEqual(cmp("my/custom:latest", self.TAGS), "not-daily")
+
 
 class DailyReportTest(unittest.TestCase):
     """The scan's daily report: checked before a human shares it, found again once shared. Read only."""

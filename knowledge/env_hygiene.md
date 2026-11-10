@@ -58,9 +58,11 @@ below are about those.
   commits at once. A scan reads the current main from one more such worktree (`RUN_DIR/main`, removed
   at the end), whatever the checkout is on.
 - Tasks test the newest sglang: the task's branch starts from the current upstream main and, unless the user
-  named an image or a container, the image is the newest daily build for its ROCm and GPU
-  (`scripts/latest_image.py`, which `scripts/run_docker.sh` starts from; the `miles` images are for
-  reinforcement learning). Compiled packages too old for the worktree fail at import or startup: that is
+  named an image (`image`), the image is the newest daily build for its ROCm and GPU
+  (`scripts/latest_image.py`, which `scripts/run_docker.sh` starts a new container from; the `miles`
+  images are for reinforcement learning). A container keeps its image, so Setup checks it first
+  (`latest_image.py --compare`) and an older or different one stops the run, before anything exists,
+  until the user answers `image_ok`. Compiled packages too old for the worktree fail at import or startup: that is
   an environment failure that names the newer image, not a framework bug to fix.
 
 ## Servers

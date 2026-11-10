@@ -27,7 +27,10 @@ every container sees: `python3 <petra_dir>/scripts/daily_report.py latest` print
    --run-dir RUN_DIR --mode scan --task scan --idle-hours <lock_idle_hours>`. Exit 1 means another
    task holds it: create nothing and return `lock: "busy"`, `run_dir: ""`, `candidates_path: ""`, with
    the holder in `notes`. Otherwise create `RUN_DIR`, and copy the previous report into it as
-   `RUN_DIR/previous_report.md` when there is one: the dispatcher marks what changed against it.
+   `RUN_DIR/previous_report.md` when there is one: the dispatcher marks what changed against it. Record
+   the image the scan runs on, which the report names: `printf '%s\n%s\n' "$PETRA_IMAGE" "$(python3
+   <petra_dir>/scripts/latest_image.py --compare "$PETRA_IMAGE")" > RUN_DIR/image.txt`. A scan reads code
+   and GitHub, so an older image does not stop it.
 2. **Current main.** Read the framework as it is upstream now, not as `framework_dir` happens to be
    checked out: it may be on a task's branch, or still at the image's commit. `git -C <framework_dir>
    fetch origin`, then `scripts/restore_owner.sh <framework_dir>/.git`, then a worktree of the current

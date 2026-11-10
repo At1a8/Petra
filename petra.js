@@ -1,7 +1,7 @@
 export const meta = {
   name: 'petra',
   description: 'Petra: the framework agent for open-source LLM inference frameworks on AMD GPUs (sglang first). It turns one task (an upstream feature to bring to AMD, an AMD user issue, a red AMD CI job, a system-level performance gap) into a verified, reviewable pull request: correct first (independent unit gates, G0-G4 against a same-pattern baseline, an investigation loop with controls), then fast (equal-budget G5), within the community rules of knowledge/guardrails.md. mode=scan writes the day\'s report on the framework (the AMD CI on main, user issues by priority, upstream changes AMD needs to follow) and ranks the tasks in it, changing no code. Petra never pushes and never posts upstream: it prepares the branch, the PR body and the reply drafts for a human; the one thing it posts is the knowledge a run proved, as a pull request to its own repository for a human to merge; a scan\'s daily report is a local file for a human to share.',
-  whenToUse: 'Pass args.petra_dir (absolute path of the Petra checkout, required) and the task, either as args.request (the user\'s words, any language; the Intake phase turns it into a task definition) or as the task-definition fields of templates/task_definition.md: args.mode (feature | issue | ci | perf | scan), args.task (the upstream PR or design, issue URL, CI job or tracker cluster, or performance goal), args.framework_dir (the framework checkout; for sglang the image\'s /sgl-workspace/sglang by default), args.model_path (required for feature and perf), args.workload (required for perf: the fixed benchmark every measurement uses), args.goal (what done means), args.framework (default sglang), args.platform, args.gpu_ids, args.container, args.apply_prs (perf), args.sources, args.since, args.upstream_repos and args.rescan (scan: a report from the last 24 hours makes the run ask before scanning again), args.stop_after (a phase title), args.resume_from="implement" with args.run_dir (feature: continue after a human approved design.md), args.kernel_backend (none | geak | command) with args.kernel_backend_dir (geak) or args.kernel_backend_command (command), args.kernel_budget. A definition that lacks something its mode needs returns status=needs_input with questions and starts nothing: answer them and run again with the same args plus args.answers ({"<field>": <value>}). Operator settings: args.exp_root, args.review_model (the reviewer\'s model, where the runtime takes one per call), args.max_fix_rounds, args.max_investigate_rounds, args.max_review_rounds, args.max_work_packages, args.agent_retries, args.agent_timeout_ms.',
+  whenToUse: 'Pass args.petra_dir (absolute path of the Petra checkout, required) and the task, either as args.request (the user\'s words, any language; the Intake phase turns it into a task definition) or as the task-definition fields of templates/task_definition.md: args.mode (feature | issue | ci | perf | scan), args.task (the upstream PR or design, issue URL, CI job or tracker cluster, or performance goal), args.framework_dir (the framework checkout; for sglang the image\'s /sgl-workspace/sglang by default), args.model_path (required for feature and perf), args.workload (required for perf: the fixed benchmark every measurement uses), args.goal (what done means), args.framework (default sglang), args.platform, args.gpu_ids, args.container, args.apply_prs (perf), args.sources, args.since, args.upstream_repos and args.rescan (scan: a report from the last 24 hours makes the run ask before scanning again), args.image (the image a task must run on; by default the newest daily one, and another stops Setup to ask) and args.image_ok, args.stop_after (a phase title), args.resume_from="implement" with args.run_dir (feature: continue after a human approved design.md), args.kernel_backend (none | geak | command) with args.kernel_backend_dir (geak) or args.kernel_backend_command (command), args.kernel_budget. A definition that lacks something its mode needs returns status=needs_input with questions and starts nothing: answer them and run again with the same args plus args.answers ({"<field>": <value>}). Operator settings: args.exp_root, args.review_model (the reviewer\'s model, where the runtime takes one per call), args.max_fix_rounds, args.max_investigate_rounds, args.max_review_rounds, args.max_work_packages, args.agent_retries, args.agent_timeout_ms.',
   phases: [
     { title: 'Intake', detail: 'intake: turn a request, or a definition with gaps, into a complete task definition; questions when something is missing' },
     { title: 'Setup', detail: 'director: run dir, the task\'s branch in the framework checkout, launch scripts, baseline (not in scan)' },
@@ -90,7 +90,8 @@ const strs = arr(str);
 // ---------------------------------------------------------------------------
 const TASK_KEYS = ['mode', 'task', 'goal', 'framework', 'framework_dir', 'model_path', 'platform', 'gpu_ids',
   'container', 'workload', 'apply_prs', 'sources', 'since', 'stop_after', 'resume_from', 'run_dir',
-  'kernel_backend', 'kernel_backend_dir', 'kernel_backend_command', 'kernel_budget', 'rescan', 'upstream_repos'];
+  'kernel_backend', 'kernel_backend_dir', 'kernel_backend_command', 'kernel_budget', 'rescan', 'upstream_repos',
+  'image', 'image_ok'];
 // '' is accepted for the enums so an undecided field costs no schema retry; pick() drops it.
 const TASK_DEF = S({
   mode: { type: 'string', enum: [...MODES, ''] },
@@ -248,6 +249,8 @@ const MAX_REVIEW = int(A.max_review_rounds, 2);           // review -> fix -> ve
 const REVIEW_MODEL = String(A.review_model || '').trim();
 const MAX_WPS = Math.max(1, int(A.max_work_packages, 12));
 const STOP_AFTER = String(A.stop_after || '').trim().toLowerCase();
+const IMAGE_WANTED = String(A.image || '').trim();  // the image the task asks for; empty: the newest daily one
+const IMAGE_OK = A.image_ok === true || String(A.image_ok).toLowerCase() === 'true';
 const RESUME = String(A.resume_from || '').trim().toLowerCase();
 const EXP_ROOT = String(A.exp_root || `${PETRA}/exp`).replace(/\/+$/, '');
 const KERNEL_BACKEND = String(A.kernel_backend || 'none').trim().toLowerCase();
@@ -397,9 +400,9 @@ const WP = S({
 }, ['id', 'goal', 'test']);
 const WPS = arr(WP);
 
-const LOCK = { type: 'string', enum: ['acquired', 'busy'] }; // the machine's run lock (scripts/run_lock.py)
 const SETUP = S({
-  lock: LOCK,
+  lock: { type: 'string', enum: ['acquired', 'busy', 'skipped'] }, // skipped: stopped at the image check, nothing created
+  image: obj, // {current, wanted, verdict} when the image check stops the run
   run_dir: str,
   baseline_status: { type: 'string', enum: ['pass', 'fail', 'skip'] },
   baseline: str,
@@ -615,16 +618,41 @@ function rolledBack(rb, wpId) {
 // Setup, then the stop_after check: a finished run record when the run ends here, else null.
 async function start(requireBaseline) {
   const s = await setup(requireBaseline);
+  if (s && s.ask) return askImage(s.ask);
   if (s === 'busy') return finish('busy', 'Setup');
   if (!s) return finish('blocked', 'Setup');
   if (stopHere('Setup')) return finish('stopped', 'Setup');
   return null;
 }
 
-// true, false, or 'busy' when another Petra task holds the machine (nothing was created then).
+// Tasks run on the newest daily image unless the user names one: another image stops the run before it
+// creates anything, with the question whether to run on it anyway.
+function askImage(img) {
+  const cur = img.current || "this container's image";
+  const want = img.wanted || 'the newest daily image';
+  const why = {
+    older: `this container runs ${cur}, older than ${want}, the newest daily image`,
+    mismatch: `this container runs ${cur}, not ${want}, the image the task asks for`,
+    resumed_elsewhere: `this run was set up on ${want}, and this container runs ${cur}`,
+  }[img.verdict] || `this container runs ${cur}, not ${want}`;
+  note('Setup', 'needs_input', why);
+  Object.assign(R, { status: 'needs_input', stopped_at: 'Setup', image: img,
+    questions: [{ field: 'image_ok', question: `${why}. Run on ${cur} anyway?`,
+      why: 'tasks test the newest sglang unless you name an image; a run on another image tests something else',
+      options: [true, false] }],
+    next: `to run on ${want}, start a container from it (README step 2) and run petra.js there; to run here anyway, ` +
+      'run petra.js again with the same arguments plus answers={"image_ok": true}' });
+  log(`[petra] mode=${MODE} status=needs_input: ${why}`);
+  return R;
+}
+
+// true, false, 'busy' when another Petra task holds the machine, or {ask} when the image check stopped
+// the run (nothing was created in either case).
 async function setup(requireBaseline) {
   enter('Setup');
-  const s = await call('director', 'setup', inputs({ require_baseline: requireBaseline }), SETUP);
+  const s = await call('director', 'setup', inputs({ require_baseline: requireBaseline, image: IMAGE_WANTED,
+    image_ok: IMAGE_OK }), SETUP);
+  if (s && s.lock === 'skipped') return { ask: s.image || {} };
   if (s && s.lock === 'busy') {
     note('Setup', 'busy', `another Petra task holds this machine${s.notes ? `: ${s.notes}` : ''}`);
     return 'busy';

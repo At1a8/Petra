@@ -7,9 +7,9 @@
      the length: an issue holds 65,536 characters, so aim for about 40,000. Every row links to its
      evidence; *new* marks what the previous report did not have. Times are UTC. -->
 
-| Window (UTC) | Sources | Previous report |
-|---|---|---|
-| <since> → <scan time> | ci, issues, upstream | <link or run name, or none> |
+| Window (UTC) | Image | Sources | Previous report |
+|---|---|---|---|
+| <since> → <scan time> | `<image>` (newest daily: `<newest>`, when this one is older) | ci, issues, upstream | <link or run name, or none> |
 
 ## Summary
 

@@ -179,7 +179,11 @@ auto-approved, and the socket would put every container on the host within their
   ROCm 10 and MI35x ([`scripts/latest_image.py`](scripts/latest_image.py), e.g.
   `v0.5.23-rocm10-mi35x-20261103`; the `miles` images on the same page are for reinforcement learning
   and are skipped). A new day's image is pulled at its first use, about 43 GB. On MI30x, set
-  `IMAGE_VARIANT=rocm10-mi30x`; for a fixed image, `IMAGE=rocm/sgl-dev:<tag>`.
+  `IMAGE_VARIANT=rocm10-mi30x`; for a fixed image, `IMAGE=rocm/sgl-dev:<tag>`. A container keeps the
+  image it started from: run_docker.sh says so when you come back to one whose image is no longer the
+  newest daily one, and a task there stops at Setup, before it creates anything, to ask whether to run
+  on it anyway (`image_ok`), unless the task names that image (`image`). A scan goes on and names its
+  image in the report.
 - **What is tested.** The image provides PyTorch, aiter, sgl-kernel and its own sglang checkout,
   `/sgl-workspace/sglang`, with the whole history, which it installs sglang from in editable mode: what
   runs is what is checked out there, so there is no sglang to clone or name. Step 3 puts it on the
@@ -371,6 +375,7 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `kernel_budget` | optimization rounds for the kernel back end (default 6) |
 | `apply_prs` | `perf`: candidate PRs to apply and A/B |
 | `sources`, `since` | `scan`: any of `ci`, `issues`, `upstream` (the default) and `hardware`, `perf`; the start of the window (default: the previous report) |
+| `image`, `image_ok` | the image a task must run on (default: the newest daily one of the container's ROCm and GPU; another one stops Setup to ask); `true` runs on the container's image anyway |
 | `rescan`, `upstream_repos` | `scan`: `true` scans again although a report from the last 24 hours exists; more repositories to follow upstream, as `[{"name": "vllm", "url": "https://github.com/vllm-project/vllm"}]` |
 | `stop_after` | stop after the named phase of the mode (e.g. `Design`, `Reproduce`); a phase the mode does not run comes back as a question |
 | `resume_from`, `run_dir` | `feature`: `implement` continues a run that stopped at Design once a human approved `design.md` |

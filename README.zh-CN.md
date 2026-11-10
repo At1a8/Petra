@@ -103,7 +103,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/At1a8/Petra/main/scripts/run
 
 这一行下载 [`scripts/run_docker.sh`](scripts/run_docker.sh) 并运行它，所以宿主机上不需要 Petra 的代码；在 Petra 的 checkout 里直接运行 `scripts/run_docker.sh` 效果相同。它就是常见的 ROCm `run_docker.sh`：一个带 GPU 的特权容器，以相同路径挂载 `/home` 和存在的数据目录（`/data`、`/mnt` 等），并在容器的 `/workspace` 里打开一个 root shell。和很多同类脚本不同，它默认不挂载宿主机的 Docker socket（`DOCKER_SOCKET=1` 才挂）：Petra 的 agent 以 root 身份、自动批准权限运行，挂上 socket 就能操作宿主机上的所有容器。
 
-- **镜像。** 任务要在最新的 sglang 上测试，所以默认使用 ROCm 10、MI35x 下最新的每日 `rocm/sgl-dev` 镜像（[`scripts/latest_image.py`](scripts/latest_image.py)，例如 `v0.5.23-rocm10-mi35x-20261103`；同一页面上的 `miles` 镜像用于强化学习，会被跳过）。每天的新镜像在第一次使用时拉取，约 43 GB。MI30x 设置 `IMAGE_VARIANT=rocm10-mi30x`；要固定镜像，设置 `IMAGE=rocm/sgl-dev:<tag>`。
+- **镜像。** 任务要在最新的 sglang 上测试，所以默认使用 ROCm 10、MI35x 下最新的每日 `rocm/sgl-dev` 镜像（[`scripts/latest_image.py`](scripts/latest_image.py)，例如 `v0.5.23-rocm10-mi35x-20261103`；同一页面上的 `miles` 镜像用于强化学习，会被跳过）。每天的新镜像在第一次使用时拉取，约 43 GB。MI30x 设置 `IMAGE_VARIANT=rocm10-mi30x`；要固定镜像，设置 `IMAGE=rocm/sgl-dev:<tag>`。容器一直使用它启动时的镜像：回到一个镜像已经不是最新每日镜像的容器时，run_docker.sh 会提醒；在里面跑任务，会在 Setup 阶段、创建任何东西之前停下来，问你是否仍在这个镜像上运行（`image_ok`），除非任务指定的就是这个镜像（`image`）。scan 会照常进行，并在日报里写明所用的镜像。
 - **测的是哪份代码。** 镜像提供 PyTorch、aiter、sgl-kernel，以及它自带的 sglang checkout `/sgl-workspace/sglang`（带完整历史），sglang 就是以 editable 方式从这里安装的：这里检出的是什么，运行的就是什么，所以不需要另外克隆或指定 sglang。第 3 步把它切到当前的 main；之后每个任务都在它上面、从最新的 main 开自己的分支，Setup 会先 fetch。在基础 commit 上跑的 baseline 和 scan 读的当前 main，用的是同一个仓库在运行目录下的 worktree（每个约 0.2 GB）。运行记录会写下镜像、镜像里 sglang 的版本和任务的基础 commit。
 - **一个任务一个容器。** 用同一个 `NAME` 再次运行时，run_docker.sh 会回到那个容器（已停止的会先启动），`/workspace` 保持你离开时的样子：它从不删除容器。下一个任务换个名字开新容器（`NAME=<name>`），用的是最新的镜像；不再需要的容器用 `docker rm -f <name>` 删除，它的 `/workspace` 也随之删除。不管有多少个容器，一台机器同时只跑一个 Petra 任务（[运行](#运行)）。你自己的 run_docker.sh 也可以用，只要它以相同路径挂载你的 home，并把它作为 `PETRA_HOST_HOME` 传进容器（`-e PETRA_HOST_HOME=$HOME`）。
 
@@ -243,6 +243,7 @@ node /path/to/GEAK/interface/runtime/engine/run_workflow.mjs petra.js --agent co
 | `kernel_budget` | kernel 后端的优化轮数（默认 6） |
 | `apply_prs` | `perf`：要应用并做 A/B 的候选 PR |
 | `sources`、`since` | `scan`：`ci`、`issues`、`upstream`（默认）以及 `hardware`、`perf` 中的任意几个；时间窗口的起点（默认为上一份日报） |
+| `image`、`image_ok` | 任务必须运行的镜像（默认是容器对应 ROCm 和 GPU 下最新的每日镜像；不是的话 Setup 会停下来问）；为 `true` 时仍在容器现有的镜像上运行 |
 | `rescan`、`upstream_repos` | `scan`：为 `true` 时，即使已有 24 小时内的日报也重新扫描；要跟进的其他上游仓库，写成 `[{"name": "vllm", "url": "https://github.com/vllm-project/vllm"}]` |
 | `stop_after` | 在该模式的指定阶段之后停下（例如 `Design`、`Reproduce`）；填了该模式没有的阶段，会作为问题返回 |
 | `resume_from`、`run_dir` | `feature`：人审阅通过 `design.md` 后，用 `implement` 继续一个停在 Design 的运行 |

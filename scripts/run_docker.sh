@@ -10,9 +10,10 @@
 #
 # Each container keeps its own /workspace, where Petra and its runs live, and its own copy of the image's
 # /sgl-workspace/sglang, the code tasks change: apart from every other container's, for as long as the
-# container exists. A container named NAME is never
-# removed: run again, this starts it if it was stopped and opens a shell in it, /workspace as it was
-# left. A new task gets a new container under another NAME, from the newest image; `docker rm -f <name>`
+# container exists. A new container starts from the newest daily image, pulled at its first use. A
+# container named NAME is never removed: run again, this starts it if it was stopped and opens a shell in
+# it, /workspace as it was left, and says so when its image is no longer the newest daily one (tasks there
+# stop at Setup to ask). A new task gets a new container under another NAME; `docker rm -f <name>`
 # removes one you are done with, and its /workspace with it. Your Claude Code, its state and your keys
 # stay in your home on the host, mounted at the same path and named in PETRA_HOST_HOME. Run README step
 # 3 once in every new container.
@@ -27,6 +28,14 @@ HOST_HOME=$HOME
 SUDO=$([ -w /var/run/docker.sock ] || echo sudo)
 RAW=https://raw.githubusercontent.com/At1a8/Petra/main/scripts
 
+latest_image() {  # scripts/latest_image.py next to this script, else the one on GitHub
+  if [ -f "$(dirname "$0")/latest_image.py" ]; then
+    python3 "$(dirname "$0")/latest_image.py" "$@"
+  else
+    curl -fsSL "$RAW/latest_image.py" | python3 - "$@"
+  fi
+}
+
 if OLD=$($SUDO docker inspect -f '{{.Config.Image}}' "$NAME" 2>/dev/null); then
   if [ -n "$IMAGE" ] && [ "$IMAGE" != "$OLD" ]; then
     echo "run_docker.sh: container $NAME runs $OLD, not $IMAGE. Pick another NAME, or remove it first" \
@@ -34,17 +43,19 @@ if OLD=$($SUDO docker inspect -f '{{.Config.Image}}' "$NAME" 2>/dev/null); then
     exit 1
   fi
   echo "run_docker.sh: back into container $NAME ($OLD), /workspace as it was left" >&2
+  CMP=$(latest_image --compare "$OLD" 2>/dev/null)
+  case "$CMP" in
+    older\ *) echo "run_docker.sh: $OLD is not the newest daily image any more; that is ${CMP#older }. Tasks in" \
+                "this container stop at Setup to ask. For the newest sglang, start a new container:" \
+                "NAME=$NAME-$(date +%m%d) $0 (or remove this one first: \`${SUDO:+sudo }docker rm -f $NAME\`," \
+                "which deletes its /workspace)" >&2 ;;
+  esac
   $SUDO docker start "$NAME" >/dev/null || exit 1
   exec $SUDO docker exec -it -w /workspace "$NAME" bash
 fi
 
 if [ -z "$IMAGE" ]; then
-  PICK="$(dirname "$0")/latest_image.py"
-  if [ -f "$PICK" ]; then
-    IMAGE=$(python3 "$PICK" --variant "$VARIANT")
-  else
-    IMAGE=$(curl -fsSL "$RAW/latest_image.py" | python3 - --variant "$VARIANT")
-  fi
+  IMAGE=$(latest_image --variant "$VARIANT")
   if [ -z "$IMAGE" ]; then
     IMAGE=$($SUDO docker images --format '{{.Repository}}:{{.Tag}}' rocm/sgl-dev |
       grep -E ":v[0-9][0-9a-z.]*-$VARIANT-[0-9]{8}\$" | awk -F- '{print $NF, $0}' | sort | tail -n 1 | cut -d' ' -f2)

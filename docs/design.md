@@ -121,8 +121,9 @@ Machines are shared: one Petra task runs per machine at a
 time (a lock in `/dev/shm`, `scripts/run_lock.py`; a second run ends as `busy`), a run uses only the
 GPUs Setup pinned (through `HIP_VISIBLE_DEVICES`) and touches only the processes and containers it
 started; the host's Docker socket is not mounted by default. Tasks test the newest sglang: unless the user names an
-image or a container, the container runs the newest daily `rocm/sgl-dev` image for its ROCm and GPU
-(`scripts/latest_image.py`). The image installs sglang in editable mode from its own full-history
+image, a task runs on the newest daily `rocm/sgl-dev` image for its ROCm and GPU (`scripts/latest_image.py`),
+which a new container starts from; a container on an older one stops Setup, before it creates
+anything, to ask (`image_ok`). The image installs sglang in editable mode from its own full-history
 checkout, `/sgl-workspace/sglang`, so what runs is what is checked out there: setup puts it on main
 once per container (discarding only the image build's packaging changes), and each task works in it
 on its own branch from the current main, which Setup fetches first; a dirty checkout stops Setup. A

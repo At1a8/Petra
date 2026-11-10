@@ -9,7 +9,18 @@ Read: `knowledge/guardrails.md`, `knowledge/dev_methodology.md`, `knowledge/env_
 ## PHASE=setup (every mode except scan)
 
 Inputs: `require_baseline` (true for `feature` and `perf`: the task cannot continue without a baseline
-that passes), `resume_run_dir`, `lock_idle_hours`.
+that passes), `resume_run_dir`, `lock_idle_hours`, `image` (the image the task asks for, or empty),
+`image_ok` (true once the user chose to run on the image this container has).
+
+**Before step 0, the image**, while nothing exists yet. The container's image is `$PETRA_IMAGE` (set by
+`scripts/run_docker.sh`; else `docker inspect` from the host, or unknown). With `image` given, it must be
+that image. Without, it must be the newest daily image of its ROCm and GPU: `python3
+<petra_dir>/scripts/latest_image.py --compare <image>` prints `current`, `older <newest>`, `unknown` or
+`not-daily`. A resumed run must have the image its `run.json` recorded, since its baseline was measured
+there. When it has not, and `image_ok` is not true, create nothing and return `lock: "skipped"`,
+`run_dir: ""`, `baseline_status: "skip"`, `gpu_ids: ""` and `image` with `current`, `wanted` (the image
+asked for, the newest daily one or the resumed run's) and `verdict` (`mismatch`, `older` or
+`resumed_elsewhere`); the run then asks the user. `unknown` and `not-daily` go on, with a note.
 
 0. **One task per machine.** Before anything else, choose `RUN_DIR` (step 1: `resume_run_dir`, the
    directory an earlier attempt created, or a new path) and take the machine:
@@ -57,10 +68,9 @@ that passes), `resume_run_dir`, `lock_idle_hours`.
      `<tree>/python`): the worktree for the feature mode, `RUN_DIR/base` for the baseline mode when there
      is one. The first log shows `sglang.__file__` inside that tree (`env_hygiene.md`, *The code under
      test*).
-   - Record the image (`$PETRA_IMAGE`, set by `scripts/run_docker.sh`; else `docker inspect` from the
-     host or "unknown"), the version of the image's own sglang (`pip show sglang`) and the worktree's
-     base commit. Unless the task names an image or a container, compare the image with
-     `scripts/latest_image.py` for the same ROCm and GPU and put an older one in `notes`.
+   - Record the image and what the check before step 0 found (an older image the user accepted
+     goes in `notes`), the version of the image's own sglang (`pip show sglang`) and the worktree's
+     base commit.
    - An image too old for the worktree (sgl-kernel or aiter rejected at import or startup) fails the
      baseline; `baseline` names the newer image to start a container from.
 4. **Baseline.**
