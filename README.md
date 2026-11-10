@@ -69,7 +69,9 @@ the roles:
 - the roles that measure (test engineer, verify engineer, performance engineer), the intake and the
   reviewer never edit framework source; the measuring ones never reuse anyone else's numbers but run
   everything again;
-- the **curator** edits only Petra's own `knowledge/` and leaves the edits uncommitted for review;
+- the **curator** edits only Petra's own `knowledge/`, and proposes the edits as a pull request to Petra's
+  repository for you to review and merge (with `PETRA_REPO_TOKEN`; without it they stay uncommitted in
+  the checkout);
 - no role pushes or posts upstream: the PR engineer returns the exact `git push`, issue replies are
   drafts, a scan's daily report is a file for you to share; the one post is the curator's knowledge
   changes, as a pull request to Petra's own repository that you merge, and only with a token you set
